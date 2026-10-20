@@ -1,0 +1,13 @@
+{
+	"autodeskProduct": "Fusion",
+	"type": "addin",
+	"id": "6b1f3c2e-8a4d-4f7e-9c21-5d0a7e3b9f10",
+	"author": "Mark LVI",
+	"description": {
+		"": "Ponte local (127.0.0.1:27183) para o JARVIS controlar o Fusion."
+	},
+	"version": "1.0.0",
+	"runOnStartup": true,
+	"supportedOS": "windows|mac",
+	"editEnabled": true
+}
