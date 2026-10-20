@@ -7,6 +7,10 @@
 # ── Secrets. Committing any of these publishes them. ──────────────────────────
 # your Gemini API key, plus per-plugin credentials
 config/api_keys.json
+
+# Local biometric profiles and downloaded recognition models
+memory/identities/
+models/identity/
 # the dashboard's TLS private key and certificate
 config/certs/
 # a LINKED WhatsApp session — committing it hands

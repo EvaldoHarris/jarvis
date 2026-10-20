@@ -435,7 +435,7 @@ class HudCanvas(QWidget):
             from memory.config_manager import get_hud_style
             self.hud_style = get_hud_style()
         except Exception:
-            self.hud_style = "face"
+            self.hud_style = "core"
         self._core_phase = 0.0
 
         self._tick       = 0
@@ -4250,6 +4250,7 @@ class RemoteKeyOverlay(QWidget):
 class MainWindow(QMainWindow):
     _log_sig        = pyqtSignal(str)
     _state_sig      = pyqtSignal(str)
+    _remote_mute_sig = pyqtSignal(bool)
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
     _reconfig_sig   = pyqtSignal()           # trigger setup overlay from any thread
     _camera_sig     = pyqtSignal(bytes)      # show camera frame preview (small overlay)
@@ -4533,6 +4534,7 @@ class MainWindow(QMainWindow):
 
         self._log_sig.connect(self._log.append_log)
         self._state_sig.connect(self._apply_state)
+        self._remote_mute_sig.connect(self._set_muted)
         self._content_sig.connect(self._show_content)
         self._reconfig_sig.connect(self._show_setup)
         self._camera_sig.connect(self._show_camera_frame)
@@ -4636,6 +4638,8 @@ class MainWindow(QMainWindow):
                 ret, frame = cap.read()
                 if ret and frame is not None:
                     _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
+                    from core.camera_frames import publish
+                    publish(buf.tobytes())
                     self._cam_frame_sig.emit(buf.tobytes())
             cap.release()
         except Exception as e:
@@ -4645,6 +4649,8 @@ class MainWindow(QMainWindow):
 
     def stop_camera_stream(self) -> None:
         self._cam_stop.set()
+        from core.camera_frames import clear
+        clear()
 
     # --- Video in the HUD area ---------------------------------------------
     #
@@ -7124,6 +7130,9 @@ class JarvisUI:
 
     def set_state(self, state: str):
         self._win._state_sig.emit(state)
+
+    def set_microphone_muted(self, muted: bool):
+        self._win._remote_mute_sig.emit(bool(muted))
 
     def write_log(self, text: str):
         self._win._log_sig.emit(text)

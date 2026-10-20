@@ -1,10 +1,31 @@
 import asyncio
 import unittest
 
-from core.audio_playback import collect_audio
+from core.audio_playback import collect_audio, PlaybackClock, offer_latest_audio
 
 
 class AudioPlaybackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_microphone_can_release_without_server_turn_complete(self):
+        clock = PlaybackClock()
+        clock.written(9600, started=10., latency=.2)
+        self.assertFalse(clock.drained(10.3))
+        self.assertTrue(clock.drained(10.6))
+
+    async def test_buffered_audio_is_not_released_early(self):
+        clock = PlaybackClock()
+        clock.written(48000, started=10., latency=.2)
+        clock.written(48000, started=10.1, latency=.2)
+        self.assertFalse(clock.drained(11.5))
+        self.assertTrue(clock.drained(12.4))
+
+    async def test_full_microphone_queue_keeps_newest_audio(self):
+        queue = asyncio.Queue(maxsize=2)
+        queue.put_nowait(b"old")
+        queue.put_nowait(b"recent")
+        offer_latest_audio(queue, b"new")
+        self.assertEqual(queue.get_nowait(), b"recent")
+        self.assertEqual(queue.get_nowait(), b"new")
+
     async def test_startup_absorbs_delayed_chunks_without_losing_bytes(self):
         queue = asyncio.Queue()
 

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -131,26 +131,67 @@
     }
     #toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
   </style>
+  <link rel="stylesheet" href="/assets/panel.css">
 </head>
-<body>
+<body data-view="panel">
   <div id="toast"></div>
   <header>
-    <div class="logo"><em>J</em>ARVIS</div>
-    <div class="pill" id="pill"><span class="dot"></span><span id="st">Connecting</span></div>
-    <div class="enc-badge" id="enc">AES-GCM</div>
+    <div class="logo"><span id="assistant-name">JARVIS</span><span class="brand-note">ASSISTENTE · CONTROLE REMOTO</span></div>
     <div class="spacer"></div>
-    <div class="url">__IP__:__PORT__</div>
+    <div class="pill" id="pill"><span class="dot"></span><span id="st">Conectando</span></div>
+    <div class="enc-badge" id="enc">AES-GCM</div>
+    <button class="actions-desktop" onclick="panelView('actions')">Ações</button>
   </header>
-  <main id="feed"></main>
+  <div class="dashboard">
+    <section class="hud-card" aria-label="Painel do Jarvis">
+      <div class="card-heading"><span>NÚCLEO DO ASSISTENTE</span><span>AO VIVO · PC</span></div>
+      <div class="hud-stage"><span id="hud-clock" class="hud-clock"></span>
+        <canvas id="avatar" aria-label="Reator do Jarvis"></canvas>
+        <span class="hud-label">CONEXÃO LOCAL · MARK LVI</span>
+      </div>
+      <div id="hud-state" class="state-line" role="status">Conectando</div>
+      <div class="metrics">
+        <div class="metric">CPU <strong id="cpu-value">—</strong><progress id="cpu-bar" max="100" value="0" aria-label="Uso da CPU"></progress></div>
+        <div class="metric">MEMÓRIA <strong id="memory-value">—</strong><progress id="memory-bar" max="100" value="0" aria-label="Uso da memória"></progress></div>
+      </div>
+      <div class="hud-controls">
+        <button id="interrupt" class="hud-button danger" disabled>INTERROMPER FALA</button>
+        <button id="pc-mute" class="hud-button" aria-pressed="false" title="Microfone do Jarvis no PC e no celular">SILENCIAR MICROFONE</button>
+      </div>
+    </section>
+    <section class="activity-card" aria-label="Conversa e atividade">
+      <div class="card-heading"><span>REGISTRO DE ATIVIDADE</span><span>CONVERSA</span></div>
+      <main id="feed" aria-label="Mensagens do Jarvis" aria-live="polite"></main>
+    </section>
+  </div>
   <footer>
-    <input id="inp" placeholder="Send a command to JARVIS…" autocomplete="off">
-    <label class="btn-attach" for="file-inp" title="Send file">📎</label>
+    <input id="inp" placeholder="Digite um comando…" autocomplete="off">
+    <label class="btn-attach" for="file-inp" title="Enviar arquivo" aria-label="Enviar arquivo">📎</label>
     <input type="file" id="file-inp" multiple accept="*/*" style="display:none">
-    <button id="mic-btn" onclick="doMic()" title="Voice command">🎤</button>
-    <button class="btn btn-wake" id="wake" onclick="doWake()">WAKE</button>
-    <button class="btn btn-send" onclick="doSend()">SEND</button>
+    <button id="mic-btn" onclick="doMic()" title="Microfone do celular" aria-label="Microfone do celular">🎤</button>
+    <button class="btn btn-wake" id="wake" onclick="doWake()">DESPERTAR</button>
+    <button class="btn btn-send" onclick="doSend()">ENVIAR</button>
   </footer>
 
+  <nav class="bottom-nav" aria-label="Navegação">
+    <button class="nav-button active" data-view="panel" onclick="panelView('panel')">Painel</button>
+    <button class="nav-button" data-view="conversation" onclick="panelView('conversation')">Conversa</button>
+    <button class="nav-button" data-view="actions" onclick="panelView('actions')">Ações</button>
+  </nav>
+  <div id="actions-sheet" class="actions-sheet" role="dialog" aria-modal="true" aria-labelledby="actions-title" hidden>
+    <div class="sheet-content">
+      <div class="sheet-title"><span id="actions-title">AÇÕES DO JARVIS</span><button id="close-actions" class="close-sheet" onclick="closePanelActions()" aria-label="Fechar ações">×</button></div>
+      <div class="quick-grid">
+        <button class="quick" onclick="panelCommand('Pesquise no navegador ')">Pesquisar no navegador<small>Digite o que quer encontrar</small></button>
+        <button class="quick" onclick="panelCommand('Liste minhas câmeras locais')">Câmeras<small>Preparar comando de listagem</small></button>
+        <button class="quick" onclick="panelCommand('Coloque meu Discord em status de almoço')">Almoço no Discord<small>Preparar mudança de status</small></button>
+        <button class="quick" onclick="document.getElementById('file-inp').click();closePanelActions()">Enviar arquivo<small>Do celular para o computador</small></button>
+        <button class="quick" id="remote-wake" onclick="closePanelActions()">Despertar<small>Ativar o assistente no computador</small></button>
+        <button class="quick" id="phone-speaker" aria-pressed="false">Ouvir no celular<small>Ativar o áudio das respostas</small></button>
+      </div>
+      <p class="sheet-note">Os atalhos preparam o comando; toque em Enviar para executar. Interromper, microfone e despertar atuam diretamente. Configurações de provedores e plugins continuam no computador.</p>
+    </div>
+  </div>
   <script>
     // ── Auth — bearer token ───────────────────────────────────────────────────
     const _authToken  = sessionStorage.getItem('jarvis_token');
@@ -247,9 +288,9 @@
     const _wsUrl   = `${_wsProto}://${location.host}/ws?token=${encodeURIComponent(_authToken)}`;
     const ws       = new WebSocket(_wsUrl);
 
-    ws.onopen    = () => { sys('Remote session active.'); toast('Connected to JARVIS'); };
+    ws.onopen    = () => { sys('Painel remoto conectado.'); toast('Conectado ao Jarvis'); };
     ws.onclose   = () => sys('Connection lost — refresh to reconnect.');
-    ws.onerror   = () => sys('Connection error.');
+    ws.onerror   = () => sys('Erro de conex?o.');
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
       if (m.type === 'log')           append(m.speaker, m.text);
@@ -261,9 +302,9 @@
 
     function setStatus(s) {
       if (s === 'active') {
-        pill.className = 'pill on'; stTxt.textContent = 'Active'; wake.classList.remove('show');
+        pill.className = 'pill on'; stTxt.textContent = 'Conectado'; wake.classList.remove('show');
       } else {
-        pill.className = 'pill'; stTxt.textContent = 'Sleeping'; wake.classList.add('show');
+        pill.className = 'pill'; stTxt.textContent = 'Em repouso'; wake.classList.add('show');
       }
     }
 
@@ -274,7 +315,7 @@
         d.innerHTML = `<div class="lbl">Jarvis</div>${esc(text)}`;
       } else {
         d.className = 'msg msg-u';
-        d.innerHTML = `<div class="lbl">You</div>${esc(text)}`;
+        d.innerHTML = `<div class="lbl">Voc?</div>${esc(text)}`;
       }
       feed.appendChild(d);
       feed.scrollTop = feed.scrollHeight;
@@ -417,11 +458,17 @@
       append('user', txt);
       const enc  = await _encrypt(txt);
       const body = enc ? { enc } : { text: txt };
-      _authFetch('/api/command', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
+      try {
+        const response = await _authFetch('/api/command', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (!response.ok) throw Error('command');
+      } catch {
+        if (!inp.value) inp.value = txt;
+        sys('Comando não enviado. Confira a conexão antes de tentar novamente.');
+      }
     }
 
     function doWake() {
@@ -592,5 +639,6 @@
       _micIdle();
     }
   </script>
+  <script src="/assets/panel.js"></script>
 </body>
 </html>

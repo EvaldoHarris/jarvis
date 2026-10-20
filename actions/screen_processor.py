@@ -160,6 +160,10 @@ def _get_camera_index() -> int:
 
 
 def _capture_camera() -> tuple[bytes, str]:
+    from core.camera_frames import latest
+    shared = latest()
+    if shared is not None:
+        return shared, "image/jpeg"
     if not _CV2:
         raise RuntimeError("OpenCV (cv2) is not installed. Run: pip install opencv-python")
 
@@ -170,11 +174,12 @@ def _capture_camera() -> tuple[bytes, str]:
     if not cap.isOpened():
         raise RuntimeError(f"Camera index {index} could not be opened.")
 
-    for _ in range(10):
-        cap.read()
-
-    ret, frame = cap.read()
-    cap.release()
+    try:
+        for _ in range(10):
+            cap.read()
+        ret, frame = cap.read()
+    finally:
+        cap.release()
 
     if not ret or frame is None:
         raise RuntimeError("Camera returned no frame.")

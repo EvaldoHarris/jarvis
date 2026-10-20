@@ -812,6 +812,126 @@ Licensed under **[Creative Commons BY-NC 4.0](https://creativecommons.org/licens
 
 ---
 
+## Status do Discord (Alexa/TRIGGERcmd)
+## Painel remoto no celular
+
+O acesso remoto tem um painel adaptado ao celular com o mesmo modelo 3D de rosto
+do desktop, estado real do assistente, CPU/memória e conversa. As abas **Painel**,
+**Conversa** e **Ações** organizam a tela. Interromper, silenciar o microfone do
+Jarvis e despertar usam controles autenticados, sem enviar essas ações ao modelo.
+Os atalhos preparam comandos para conferir e enviar; arquivos e microfone do
+celular continuam disponíveis. A gravação de voz depende das permissões e do
+contexto seguro exigido pelo navegador.
+
+Em **Ações → Ouvir no celular**, o usuário pode ativar a reprodução das próximas
+respostas no telefone. O áudio é transmitido pela conexão pareada e apenas aos
+clientes que ativaram essa opção, sem ser salvo ou repetido pelo histórico.
+O painel é uma interface móvel conectada ao aplicativo; não espelha a tela do
+Windows. Configurações de credenciais, provedores e plugins continuam no PC.
+
+## Pesquisa no navegador com Playwright e visão
+
+`browser_control` usa uma sessão Playwright desde a primeira navegação.
+`search` abre a pesquisa, lê a URL e envia uma captura da página e texto DOM
+de apoio ao provedor de IA para conferir os resultados. `inspect` permite
+observar novamente depois de clicar, rolar ou navegar. A captura é da página
+controlada, sem incluir outras janelas ou monitores.
+
+As interações usam elementos DOM pelo Playwright. Falha na visão, CAPTCHA,
+pedido de login e uso de perfil separado devem ser informados pelo Jarvis.
+Se o perfil pessoal estiver bloqueado pelo navegador já aberto, a sessão
+controlada pode usar um perfil separado, sem os seus logins. Não há desvio
+automático para abertura nativa do Windows nas ações de navegação.
+
+## Status do Discord (Alexa/TRIGGERcmd)
+
+O plugin `discord_status` reutiliza `C:/TRIGGERcmd/DiscordStatus/almoco.ps1`
+e `voltei.ps1`, já usados pela Alexa. Comandos: “Jarvis, coloque meu Discord
+em status de almoço” e “Jarvis, voltei, fique disponível no Discord”.
+Reinicie o Jarvis após adicionar o plugin. Os scripts são externos ao repositório;
+exigem AutoHotkey v2 e a calibração já existente da interface do Discord.
+
+O agendamento extra do Windows para voltar ao disponível foi removido do
+script de almoço nesta instalação. A duração de uma hora continua sendo
+selecionada na interface do próprio Discord. O retorno manual por `voltei`
+permanece disponível. A execução do script não comprova visualmente o status;
+o Jarvis relata essa limitação e não repete o comando automaticamente.
+
+## Câmeras iCSee pelo VMS Pro
+
+### Acesso direto às câmeras locais
+
+O plugin `cameras_locais` permite capturar uma imagem diretamente por RTSP,
+sem abrir o VMS. Após reiniciar o Jarvis, abra **Config. de plugins → CÂMERAS
+LOCAIS — RTSP DIRETO**. Dois dispositivos descobertos nesta instalação estão
+pré-preenchidos: `192.168.15.73` (iCSee/XM) e `192.168.15.149` (Intelbras).
+Renomeie-os conforme o local e preencha o usuário e a senha **do dispositivo**,
+que podem ser diferentes da conta do iCSee. Use **TESTAR CÂMERAS**.
+
+Os caminhos RTSP são tentativas baseadas na família do equipamento, não uma
+garantia de compatibilidade. O stream 1 é a opção leve; tente 0 para o principal
+se necessário. IPs podem mudar com DHCP; é recomendável reservá-los no roteador.
+Não há tentativa de senhas alternativas, acesso a gravações ou controle PTZ.
+O acesso direto desta integração exige executar o Jarvis pelo Python.
+
+Comandos: “liste as câmeras locais”, “teste a câmera iCSee”, “mostre a câmera
+Intelbras” (imagem local) ou “analise a câmera Intelbras” (imagem enviada à IA).
+Cada pedido captura uma imagem, não um vídeo contínuo. O áudio da conversa e
+os resultados textuais seguem o provedor do Jarvis mesmo na prévia local.
+
+As credenciais ficam em `config/api_keys.json`, ignorado pelo Git. Elas são
+armazenadas como configuração local, sem criptografia adicional; não compartilhe
+esse arquivo. URLs autenticadas são passadas ao processo de captura pela entrada
+padrão, não pela linha de comando, e os logs nativos do capturador são descartados
+para evitar expor senhas. Não é necessário abrir portas no roteador.
+
+### Câmeras remotas pelo VMS
+
+Com o VMS Pro aberto, conectado e mostrando as câmeras, o Jarvis pode usar
+`vms_cameras` para mostrar a janela, tentar selecionar uma câmera pelo nome
+ou analisar uma imagem dos vídeos visíveis. Exemplo: “Jarvis, analise as câmeras
+do VMS” ou “Jarvis, o que aparece na câmera casa no VMS?”. Reinicie o Jarvis
+após adicionar a ferramenta.
+
+A integração usa a sessão existente do VMS, incluindo os acessos remotos que
+ele já oferece, sem armazenar senha do iCSee no projeto. A análise envia uma
+captura da janela do VMS ao provedor de IA configurado. Não captura os outros
+monitores por essa ferramenta. Apenas uma imagem é analisada por pedido;
+não há monitoramento contínuo, acesso a gravações ou controle PTZ.
+
+A seleção automática depende dos itens que o VMS expõe pela acessibilidade
+do Windows. Se não houver um item único acessível pelo nome solicitado, abra
+a câmera manualmente. O Jarvis não deve confundir a seleção na lista lateral
+com a câmera efetivamente exibida no vídeo.
+
+## Reconhecimento local de rosto e voz
+
+Opcional: instale `sherpa-onnx` no mesmo ambiente do Jarvis e execute
+`python setup_identity.py` para baixar os modelos YuNet/SFace do OpenCV e
+WeSpeaker do sherpa-onnx. Reinicie o Jarvis.
+
+O cadastro exige um pedido explícito. Olhe sozinho para a câmera e diga uma
+frase de pelo menos 3 segundos, como: “Jarvis, cadastre meu rosto e minha voz
+com o nome Evaldo; estou olhando para a câmera agora”. Para reconhecer, diga:
+“Jarvis, verifique pelo meu rosto e pela minha voz quem está falando com você”.
+Também é possível pedir para listar os cadastros ou apagar um nome específico.
+
+O reconhecimento é sob demanda, sem monitoramento contínuo. O nome só é
+confirmado quando rosto e voz correspondem ao mesmo cadastro. Fala curta,
+mais de um rosto, pouca luz ou resultados diferentes retornam sem confirmação.
+Não é autenticação, prova de presença nem identificação do falante ativo em
+uma sala com várias pessoas; gravações podem enganar o reconhecimento.
+
+Somente os vetores de cadastro são persistidos em `memory/identities/`;
+fotos e gravações usadas pelo reconhecimento não são salvas. O áudio recente
+fica brevemente na memória enquanto o microfone local está ativo. Esses dados
+e os modelos baixados são ignorados pelo Git. O reconhecimento é local; o
+áudio da conversa e pedidos de análise visual continuam seguindo o provedor
+que você configurou para o Jarvis.
+
+Fontes dos modelos: [OpenCV Zoo](https://github.com/opencv/opencv_zoo) e
+[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models).
+
 ## 👤 Connect with the Creator
 
 Engineered by a developer building a real-world JARVIS-style assistant.

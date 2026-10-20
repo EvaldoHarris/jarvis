@@ -2,6 +2,25 @@
 import asyncio
 
 
+class PlaybackClock:
+    """Release the microphone after actual PCM drains, even without turn_complete."""
+    def __init__(self):
+        self.until = 0.0
+
+    def written(self, size, started, latency):
+        self.until = max(self.until, started + max(0., latency)) + size / 48000
+
+    def drained(self, now):
+        return now >= self.until + 0.15
+
+
+def offer_latest_audio(queue, message):
+    """Keep recent microphone audio instead of raising QueueFull in a callback."""
+    if queue.full():
+        queue.get_nowait()
+    queue.put_nowait(message)
+
+
 async def collect_audio(queue, first, *, prebuffer=False, turn_done=None):
     """Preserve every queued byte; wait at most 80 ms to smooth startup jitter."""
     batch = bytearray(first)

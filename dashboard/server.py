@@ -676,6 +676,7 @@ class DashboardServer:
         self._token_keys: dict[str, str]  = {}   # auth_token → session_key
         self._aes_cache:  dict[str, bytes]= {}   # session_key → AES bytes
         self._clients: set[WebSocket]     = set()
+        self._audio_clients: set[WebSocket] = set()
         self._history: list[dict]         = []
         self._command_queue               = asyncio.Queue()
         self._wake_callback               = None
@@ -688,6 +689,9 @@ class DashboardServer:
         # Set by serve() when the port could not be taken, so the UI can say
         # why the QR code leads nowhere instead of showing it regardless.
         self._bind_error: str = ""
+        self._server = None
+        self._panel_state_callback = None
+        self._panel_control_callback = None
         self._login_html                  = _read("login.html")
         self._app_html                    = _read("app.html")
         self.app                          = self._build_app()
@@ -778,6 +782,10 @@ class DashboardServer:
     def set_connect_callback(self, fn) -> None:
         self._connect_callback = fn
 
+    def set_panel_callbacks(self, state, control) -> None:
+        self._panel_state_callback = state
+        self._panel_control_callback = control
+
     # ── broadcast ────────────────────────────────────────────────────────
 
     async def broadcast(self, msg: dict) -> None:
@@ -791,6 +799,17 @@ class DashboardServer:
             except Exception:
                 dead.add(ws)
         self._clients -= dead
+
+    async def broadcast_audio(self, pcm: bytes) -> None:
+        """Only opted-in paired phones receive live audio; never store/replay it."""
+        if not self._audio_clients:
+            return
+        message = {"type": "audio", "rate": 24000, "data": base64.b64encode(pcm).decode("ascii")}
+        for ws in list(self._audio_clients):
+            try:
+                await asyncio.wait_for(ws.send_json(message), timeout=.5)
+            except Exception:
+                self._audio_clients.discard(ws)
 
     # ── FastAPI app ───────────────────────────────────────────────────────
 
@@ -818,6 +837,45 @@ class DashboardServer:
         def _who(req: Request) -> str:
             """The client address a throttle counts against."""
             return (getattr(getattr(req, "client", None), "host", "") or "unknown")
+
+        @app.get("/assets/{filename}")
+        async def panel_asset(filename: str):
+            if filename not in ("panel.css", "panel.js"):
+                return JSONResponse({"error": "Not found"}, status_code=404)
+            media = "text/css" if filename.endswith(".css") else "application/javascript"
+            return FileResponse(str(BASE_DIR / "dashboard" / "static" / filename), media_type=media,
+                                headers={"Cache-Control": "no-cache"})
+
+        @app.get("/api/panel")
+        async def panel_state(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            if self._panel_state_callback is None:
+                return JSONResponse({"connected": False, "state": "OFFLINE"})
+            return JSONResponse(self._panel_state_callback(), headers={"Cache-Control": "no-store"})
+
+        @app.get("/api/avatar")
+        async def panel_avatar(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            from core.avatar_mesh import get_head_mesh
+            mesh = get_head_mesh()
+            return JSONResponse({key: mesh[key].tolist() for key in ("verts", "edges", "jaw")})
+
+        @app.post("/api/control")
+        async def panel_control(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            data = await req.json()
+            action = data.get("action")
+            if action not in ("interrupt", "mute", "wake"):
+                return JSONResponse({"error": "Unsupported control"}, status_code=400)
+            if action == "mute" and type(data.get("value")) is not bool:
+                return JSONResponse({"error": "value must be boolean"}, status_code=400)
+            if self._panel_control_callback is None:
+                return JSONResponse({"error": "Assistant unavailable"}, status_code=503)
+            self._panel_control_callback(action, data.get("value"))
+            return JSONResponse({"ok": True})
 
         @app.get("/login", response_class=HTMLResponse)
         async def login_page():
@@ -1121,6 +1179,12 @@ class DashboardServer:
             try:
                 while True:
                     data = await websocket.receive_json()
+                    if data.get("type") == "listen_audio" and type(data.get("enabled")) is bool:
+                        if data["enabled"]:
+                            self._audio_clients.add(websocket)
+                        else:
+                            self._audio_clients.discard(websocket)
+                        await websocket.send_json({"type": "audio_subscription", "enabled": data["enabled"]})
                     if data.get("type") == "command":
                         enc = data.get("enc", "")
                         t   = self._decrypt(tok, enc) if enc else (data.get("text") or "").strip()
@@ -1132,6 +1196,7 @@ class DashboardServer:
                 pass
             finally:
                 self._clients.discard(websocket)
+                self._audio_clients.discard(websocket)
 
         return app
 
@@ -1168,13 +1233,26 @@ class DashboardServer:
                 status_code=307)
 
         cfg = uvicorn.Config(bounce, host="0.0.0.0", port=PORT,
-                             log_level="warning")
+                             log_level="warning", use_colors=False)
         print(f"[Dashboard] Type by hand:  {self._ip}:{PORT}  "
               f"(sends you to the secure page)")
         await uvicorn.Server(cfg).serve()
 
     async def serve(self) -> None:
+        """Keep startup failures visible to the remote-control dialog."""
+        self._bind_error = ""
+        try:
+            await self._serve()
+        except (Exception, SystemExit) as exc:
+            self._bind_error = (
+                "O servidor remoto não iniciou "
+                f"({type(exc).__name__}). Reinicie o Jarvis e confira a porta {PORT}."
+            )
+            print(f"[Dashboard] {self._bind_error}")
+
+    async def _serve(self) -> None:
         if not _DEPS_OK:
+            self._bind_error = "Faltam dependências do acesso remoto: fastapi, uvicorn ou cryptography."
             print("[Dashboard] fastapi/uvicorn not installed — dashboard disabled.")
             print("[Dashboard] Run:  pip install fastapi 'uvicorn[standard]' cryptography")
             return
@@ -1225,6 +1303,9 @@ class DashboardServer:
         cfg = uvicorn.Config(
             self.app, host="0.0.0.0",
             port=SECURE_PORT if use_ssl else PORT, log_level="warning",
+            # pythonw.exe has sys.stdout=None. Uvicorn's automatic color
+            # detection calls stdout.isatty() and crashes before binding.
+            use_colors=False,
             **({"ssl_keyfile": str(ssl_key), "ssl_certfile": str(ssl_cert)}
                if use_ssl else {}),
         )
@@ -1259,4 +1340,5 @@ class DashboardServer:
 
         print(f"[Dashboard] {self.get_url()}")
         print("[Dashboard] Press 'Remote Control' in JARVIS UI to get the QR code.")
-        await uvicorn.Server(cfg).serve()
+        self._server = uvicorn.Server(cfg)
+        await self._server.serve()

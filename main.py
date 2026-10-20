@@ -43,7 +43,10 @@ import sys
 import traceback
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
-from core.audio_playback import collect_audio
+from core.audio_playback import collect_audio, PlaybackClock, offer_latest_audio
+from core.person_identity import feed_microphone
+from core.turn_watchdog import has_answer_progress, MicrophoneTurn
+from core.voice_health import record as voice_health
 from datetime import datetime
 from pathlib import Path
 
@@ -868,6 +871,7 @@ class JarvisLive:
             if deadline is None or time.monotonic() < deadline:
                 continue
             self._clear_stall()
+            voice_health("response_timeout_reconnecting")
             print(f"[JARVIS] ⚠️  No response for {_STALL_LIMIT:.0f}s — "
                   f"the live session is not answering. Rebuilding it.")
             self.ui.write_log("SYS: The model stopped answering — reconnecting.")
@@ -929,13 +933,19 @@ class JarvisLive:
                 "Run: pip install fastapi \"uvicorn[standard]\" cryptography"
             )
             return None
+        error = getattr(self._dashboard, "_bind_error", "") or ""
+        server = getattr(self._dashboard, "_server", None)
+        if not error and not (server and server.started and not server.should_exit):
+            error = "O servidor remoto ainda não está disponível. Aguarde a inicialização ou reinicie o Jarvis."
+        if error:
+            self.ui.write_log(f"SYS: {error}")
         key    = self._dashboard.new_key()
         url    = self._dashboard.get_url()
         manual = self._dashboard.get_manual_url()
         # The bind error travels with the URL because the UI has no reference to
         # this object — it only ever sees what this callback returns.
         return (url, key, f"{url}/auto-login?key={key}", manual,
-                getattr(self._dashboard, "_bind_error", "") or "")
+                error)
 
     def _on_text_command(self, text: str):
         if not self._loop or not self.session:
@@ -1127,6 +1137,18 @@ class JarvisLive:
                       'language. Never an archaic or aristocratic form, and never '
                       'the form from a different language than the one you are '
                       'speaking in this sentence.')
+        try:
+            from core.person_identity import load_profiles
+            if load_profiles():
+                _addr = (
+                    "ADDRESS: The configured owner's name is not proof of who "
+                    "is speaking. Use a person's name only after person_identity "
+                    "confirms both face and voice for this interaction. When "
+                    "asked to recognize the speaker, call that tool. If it "
+                    "cannot confirm, address the person without a name."
+                )
+        except Exception as exc:
+            print(f"[Identity] profiles unavailable: {exc}")
         identity_ctx = (
             f"[IDENTITY]\n"
             f"Your name is {self._asst_name}. "
@@ -1461,19 +1483,50 @@ class JarvisLive:
         )
 
     async def _send_realtime(self):
+        streaming = False
+        local_turn = MicrophoneTurn()
+
+        def check_local_turn():
+            started = local_turn.ended(time.monotonic())
+            if started is not None and self._last_answer_at < started:
+                voice_health("local_speech_ended_waiting_for_answer")
+                self._arm_stall()
+
         while True:
-            msg = await self.out_queue.get()
+            try:
+                msg = await asyncio.wait_for(self.out_queue.get(), timeout=0.5)
+            except asyncio.TimeoutError:
+                check_local_turn()
+                # A paused/muted mic must not leave the server waiting for
+                # audio forever. This is the Live API's end-of-stream marker,
+                # not a fabricated text instruction or manual VAD event.
+                if streaming and self._engine is None:
+                    await asyncio.wait_for(
+                        self.session.send_realtime_input(audio_stream_end=True), timeout=5)
+                    streaming = False
+                    voice_health("microphone_stream_end_sent")
+                continue
             # Gemini 3.x Live rejects the old realtime_input.media_chunks field
             # (what `media=...` maps to) and closes the socket with a 1007. Send
             # mic / phone PCM through the new `audio` field instead. Queue items
             # are {"data": <bytes>, "mime_type": <str>} from _listen_audio and
             # the phone relay.
-            await self.session.send_realtime_input(
-                audio=types.Blob(
-                    data=msg["data"],
-                    mime_type=msg.get("mime_type", "audio/pcm"),
-                )
-            )
+            try:
+                await asyncio.wait_for(self.session.send_realtime_input(
+                    audio=types.Blob(
+                        data=msg["data"],
+                        mime_type=msg.get("mime_type", "audio/pcm"),
+                    )
+                ), timeout=5)
+            except asyncio.TimeoutError:
+                voice_health("microphone_send_timeout")
+                self.ui.write_log("SYS: O envio do microfone travou; recuperando a conexão.")
+                raise
+            if not streaming:
+                voice_health("microphone_stream_started")
+            streaming = True
+            local_turn.observe(msg["data"], time.monotonic(), SEND_SAMPLE_RATE)
+            check_local_turn()
 
     async def _listen_audio(self):
         print("[JARVIS] 🎤 Mic started")
@@ -1541,8 +1594,9 @@ class JarvisLive:
             
             if not self.ui.muted and not self._phone_active:
                 data = indata.tobytes()
+                feed_microphone(data, SEND_SAMPLE_RATE)
                 loop.call_soon_threadsafe(
-                    self.out_queue.put_nowait,
+                    offer_latest_audio, self.out_queue,
                     {"data": data, "mime_type": "audio/pcm"}
                 )
                 # Feed the live mic level to the HUD so the waveform reacts to
@@ -1591,6 +1645,10 @@ class JarvisLive:
                 print("[JARVIS] 🎤 Mic stream open")
                 while True:
                     await asyncio.sleep(0.1)
+                    if not _mic_stream.active:
+                        voice_health("microphone_device_stopped")
+                        self.ui.write_log("SYS: O microfone parou de capturar áudio; reconectando.")
+                        raise RuntimeError("Microphone stream stopped unexpectedly")
         except Exception as e:
             print(f"[JARVIS] ❌ Mic: {e}")
             raise
@@ -1645,11 +1703,14 @@ class JarvisLive:
         try:
             while True:
                 async for response in self.session.receive():
-                    # Anything at all from the server proves the return path is
-                    # alive, so the stall clock stops here rather than in any of
-                    # the branches below — a tool call, a transcript or a bare
-                    # keepalive all count.
-                    self._clear_stall()
+                    # A transcript or session-resumption update is not an
+                    # answer. Keep waiting for assistant output or a tool call.
+                    answer_progress = has_answer_progress(response)
+                    if answer_progress:
+                        if time.monotonic() - self._last_answer_at > 2:
+                            voice_health("answer_received")
+                        self._last_answer_at = time.monotonic()
+                        self._clear_stall()
 
                     # ── Session resumption ───────────────────────────────────
                     # The server sends this periodically. `resumable` goes false
@@ -1701,7 +1762,14 @@ class JarvisLive:
                             txt = _clean_transcript(sc.input_transcription.text)
                             if txt:
                                 in_buf.append(txt)
+                                voice_health("user_transcription_received")
                                 self._last_user_speech = time.monotonic()
+                                if not answer_progress:
+                                    # Realtime microphone sends do not pass
+                                    # through send_client_content's watchdog.
+                                    # Start after the latest speech fragment,
+                                    # not while a long sentence is still going.
+                                    self._rx_deadline = time.monotonic() + _STALL_LIMIT
 
                         if sc.turn_complete:
                             if self._turn_done_event:
@@ -1821,6 +1889,7 @@ class JarvisLive:
         playback_loop = asyncio.get_running_loop()
         prebuffer = True
         underflows = 0
+        playback_clock = PlaybackClock()
         try:
             while True:
                 try:
@@ -1831,12 +1900,16 @@ class JarvisLive:
                 except asyncio.TimeoutError:
                     prebuffer = True
                     if (
-                        self._turn_done_event
-                        and self._turn_done_event.is_set()
-                        and self.audio_in_queue.empty()
+                        self.audio_in_queue.empty()
+                        and playback_clock.drained(time.monotonic())
                     ):
-                        self.set_speaking(False)
-                        self._turn_done_event.clear()
+                        with self._speaking_lock:
+                            was_speaking = self._is_speaking
+                        if was_speaking:
+                            self.set_speaking(False)
+                            voice_health("playback_drained_microphone_released")
+                        if self._turn_done_event:
+                            self._turn_done_event.clear()
                     continue
 
                 self.set_speaking(True)
@@ -1903,15 +1976,22 @@ class JarvisLive:
                     pass
 
                 try:
+                    write_started = time.monotonic()
                     underflow = await playback_loop.run_in_executor(
                         audio_writer, stream.write, bytes(batch))
+                    playback_clock.written(len(batch), write_started, self._out_latency)
+                    if self._dashboard and self._dashboard._audio_clients:
+                        asyncio.create_task(self._dashboard.broadcast_audio(bytes(batch)))
                     if underflow:
                         underflows += 1
                         prebuffer = True
                         if underflows == 1 or underflows % 10 == 0:
                             print(f"[JARVIS] Audio output underflow: {underflows}")
-                except (RuntimeError, asyncio.CancelledError):
-                    break   # executor shutting down — exit cleanly
+                except asyncio.CancelledError:
+                    raise
+                except RuntimeError:
+                    self.ui.write_log("SYS: A reprodução de áudio falhou; recuperando a sessão.")
+                    raise
         except Exception as e:
             print(f"[JARVIS] ❌ Play: {e}")
             raise
@@ -2199,14 +2279,31 @@ class JarvisLive:
             with self._speaking_lock:
                 speaking = self._is_speaking
             if not speaking and not self.ui.muted:
-                try:
-                    self.out_queue.put_nowait(chunk)
-                except asyncio.QueueFull:
-                    pass
+                offer_latest_audio(self.out_queue, chunk)
 
     def _on_phone_connected(self) -> None:
         self.ui.write_log("SYS: Phone connected via Remote Dashboard.")
         self.ui.notify_phone_connected()
+
+    def _remote_panel_state(self):
+        import psutil
+        return {
+            "name": getattr(self, "_asst_name", "JARVIS"),
+            "connected": self.session is not None,
+            "state": str(getattr(self.ui._win.hud, "state", "LISTENING")),
+            "hud_style": getattr(self.ui._win.hud, "hud_style", "core"),
+            "muted": bool(self.ui.muted),
+            "level": float(self._out_level),
+            "cpu": psutil.cpu_percent(), "memory": psutil.virtual_memory().percent,
+        }
+
+    def _remote_panel_control(self, action, value=None):
+        if action == "interrupt":
+            self.interrupt()
+        elif action == "mute":
+            self.ui.set_microphone_muted(value)
+        elif action == "wake":
+            self.wake(reason="remote panel")
 
     # ── dashboard command relay ─────────────────────────────────────────────
 
@@ -2391,6 +2488,8 @@ class JarvisLive:
             from dashboard.server import DashboardServer
             self._dashboard = DashboardServer()
             self._dashboard.set_connect_callback(self._on_phone_connected)
+            self._dashboard.set_panel_callbacks(self._remote_panel_state, self._remote_panel_control)
+            self._dashboard.set_wake_callback(lambda: self.wake(reason="remote command"))
             asyncio.create_task(self._dashboard.serve())
             # Runs for the whole lifetime, not just inside an active session
             asyncio.create_task(self._process_dashboard_commands())
@@ -2448,6 +2547,8 @@ class JarvisLive:
                     self.out_queue        = asyncio.Queue(maxsize=200)
                     self._turn_done_event = asyncio.Event()
                     self._rx_deadline     = None
+                    self._last_answer_at  = 0.0
+                    voice_health("session_connected")
 
                     # Reset transient state that must not carry over from a previous session
                     self._pending_vision       = None
