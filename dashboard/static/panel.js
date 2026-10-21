@@ -32,7 +32,7 @@
     polling=true;
     try{
       const response=await _authFetch('/api/panel');
-      if(response.status===401){location.replace('/login');return;}
+      if(response.status===401){_reconnectPanel();return;}
       if(!response.ok)throw Error('state');
       renderState(await response.json());
     }catch{renderState({...state,connected:false});}

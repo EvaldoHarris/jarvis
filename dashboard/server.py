@@ -18,6 +18,8 @@ import socket
 import string
 import threading
 import time
+import json
+import os
 from pathlib import Path
 
 _DEPS_OK = False
@@ -668,7 +670,7 @@ class _Throttle:
 
 class DashboardServer:
 
-    def __init__(self):
+    def __init__(self, device_store_path=None):
         self._ip                          = _local_ip()
         # token -> issued-at. A set had no way to expire anything; this does,
         # and `_auth` sweeps as it reads so nothing has to run a timer.
@@ -684,6 +686,8 @@ class DashboardServer:
         self._pending_keys: dict[str, float] = {}
         self._throttle                    = _Throttle()
         self._device_sessions: dict[str, dict] = {}  # device_token → {session_key}
+        self._device_store_path = Path(device_store_path) if device_store_path is not None else BASE_DIR / "config" / "dashboard_devices.json"
+        self._load_devices()
         self._phone_audio_queue: asyncio.Queue    = asyncio.Queue(maxsize=200)
         self._uploads_dir                 = UPLOADS_DIR
         # Set by serve() when the port could not be taken, so the UI can say
@@ -697,6 +701,37 @@ class DashboardServer:
         self.app                          = self._build_app()
 
     # ── one-time key management ───────────────────────────────────────────
+
+    def _load_devices(self):
+        try:
+            data = json.loads(self._device_store_path.read_text(encoding="utf-8"))
+            self._device_sessions = {
+                token: {"session_key": item["session_key"]}
+                for token, item in data.items()
+                if re.fullmatch(r"[a-f0-9]{64}", token) and isinstance(item, dict)
+                and isinstance(item.get("session_key"), str) and 8 <= len(item["session_key"]) <= 128
+            }
+        except (OSError, ValueError, TypeError, AttributeError):
+            self._device_sessions = {}
+
+    def _save_devices(self):
+        self._device_store_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self._device_store_path.with_suffix(".tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
+            os.chmod(temporary, 0o600)
+            json.dump(self._device_sessions, handle)
+        temporary.replace(self._device_store_path)
+
+    def _remember_device(self, session_key):
+        token = secrets.token_urlsafe(32)
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        self._device_sessions[digest] = {"session_key": session_key}
+        try:
+            self._save_devices()
+        except OSError:
+            self._device_sessions.pop(digest, None)
+            raise
+        return token
 
     def new_key(self, expiry_secs: int = 600) -> str:
         now = time.time()
@@ -921,7 +956,8 @@ class DashboardServer:
                     {"type": "sys", "text": "Remote connection established."}
                 ))
                 # Bearer token in response body — no cookies needed (works on any browser/HTTP)
-                return JSONResponse({"ok": True, "token": tok})
+                dev_tok = self._remember_device(entered)
+                return JSONResponse({"ok": True, "token": tok, "device_token": dev_tok})
             self._throttle.record_failure(who)
             return JSONResponse({"ok": False, "error": "Invalid or expired key"},
                                 status_code=401)
@@ -944,11 +980,10 @@ class DashboardServer:
 
             del self._pending_keys[key]
             tok     = secrets.token_urlsafe(32)
-            dev_tok = secrets.token_urlsafe(32)
+            dev_tok = self._remember_device(key)
             self._tokens[tok] = time.time()
             self._token_keys[tok] = key
             self._aes_key(key)
-            self._device_sessions[dev_tok] = {"session_key": key}
 
             if self._connect_callback:
                 self._connect_callback()
@@ -980,10 +1015,13 @@ class DashboardServer:
                 body = await req.json()
             except Exception:
                 return JSONResponse({"ok": False}, status_code=400)
-            dev_tok = (body.get("device_token") or "").strip()
-            if not dev_tok or dev_tok not in self._device_sessions:
+            dev_tok = body.get("device_token")
+            if not isinstance(dev_tok, str) or not 20 <= len(dev_tok) <= 128:
                 return JSONResponse({"ok": False}, status_code=401)
-            session_key = self._device_sessions[dev_tok]["session_key"]
+            digest = hashlib.sha256(dev_tok.encode()).hexdigest()
+            if digest not in self._device_sessions:
+                return JSONResponse({"ok": False}, status_code=401)
+            session_key = self._device_sessions[digest]["session_key"]
             tok = secrets.token_urlsafe(32)
             self._tokens[tok] = time.time()
             self._token_keys[tok] = session_key
@@ -1013,6 +1051,7 @@ class DashboardServer:
             count = len(self._device_sessions)
             live  = len(self._tokens) - (1 if mine in self._tokens else 0)
             self._device_sessions.clear()
+            self._save_devices()
             keep = self._tokens.get(mine)
             self._tokens.clear()
             self._token_keys = {k: v for k, v in self._token_keys.items() if k == mine}

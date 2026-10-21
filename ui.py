@@ -34,7 +34,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import (
     QBrush, QColor, QConicalGradient, QDragEnterEvent, QDropEvent, QFont,
     QFontDatabase, QKeySequence, QLinearGradient, QPainter, QPainterPath,
-    QPen, QPixmap, QRadialGradient, QShortcut,
+    QPen, QPixmap, QRadialGradient, QShortcut, QIcon,
 )
 # Video playback for the HUD. Part of PyQt6, so it costs no new dependency —
 # but the multimedia plugins are a separate piece of the Qt install and can be
@@ -3885,8 +3885,10 @@ class PluginSettingsOverlay(QWidget):
             form.addWidget(w)
 
         # optional test/connect action button + status line
-        action = sec.get("action")
-        if isinstance(action, dict) and callable(action.get("run")):
+        actions = [sec.get("action")] + list(sec.get("actions") or [])
+        for action in actions:
+            if not isinstance(action, dict) or not callable(action.get("run")):
+                continue
             form.addSpacing(2)
             ab = QPushButton(str(action.get("label") or "TEST"))
             ab.setFixedHeight(30)
@@ -3897,7 +3899,7 @@ class PluginSettingsOverlay(QWidget):
                     border: 1px solid {C.PRI_DIM}; border-radius: 7px; }}
                 QPushButton:hover {{ background: {C.PRI_GHO}; border-color: {C.PRI}; }}
             """)
-            ab.clicked.connect(lambda _=False, n=ns: self._run_action(n))
+            ab.clicked.connect(lambda _=False, n=ns, a=action: self._run_action(n, a))
             form.addWidget(ab)
 
         status = self._lbl("", 8, color=C.TEXT_DIM)
@@ -3947,19 +3949,21 @@ class PluginSettingsOverlay(QWidget):
                     lbl.setText("Salvo ✓")
                     lbl.setStyleSheet(f"color: {C.PRI}; background: transparent;")
 
-    def _run_action(self, ns: str):
+    def _run_action(self, ns: str, action=None):
         sec = next((s for s in self._sections
                     if (s.get("namespace") or s.get("plugin")) == ns), None)
         if not sec:
             return
-        run_fn = (sec.get("action") or {}).get("run")
+        action = action or sec.get("action") or {}
+        run_fn = action.get("run")
         if not callable(run_fn):
             return
-        self._save_ns(ns)                 # persist what the user typed before testing
+        if action.get("save", True):
+            self._save_ns(ns)                 # persist before testing
         values = self._gather(ns)
         lbl = self._status_labels.get(ns)
         if lbl:
-            lbl.setText("Testando…")
+            lbl.setText(action.get("pending", "Testando…"))
             lbl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
 
         def worker():
@@ -4256,6 +4260,7 @@ class MainWindow(QMainWindow):
     _camera_sig     = pyqtSignal(bytes)      # show camera frame preview (small overlay)
     _cam_stream_sig = pyqtSignal(bool)       # True=start live stream, False=stop
     _cam_frame_sig  = pyqtSignal(bytes)      # live camera frame → HUD area
+    _security_sig = pyqtSignal(object)
     _video_open_sig  = pyqtSignal(str, str, bool, str)  # video, title, muted, audio
     _wake_btns_sig   = pyqtSignal()          # wake state resolved off-thread
     _video_close_sig = pyqtSignal()
@@ -4344,6 +4349,9 @@ class MainWindow(QMainWindow):
         _cam_title.setFont(QFont(FONT_UI, 8, QFont.Weight.Bold))
         _cam_title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
         _cam_hdr.addWidget(_cam_title)
+        self._cam_title = _cam_title
+        self._security_generation = -1
+        self._security_active = False
         _cam_hdr.addStretch()
         _cam_x = QPushButton("✕  FECHAR")
         _cam_x.setFont(QFont(FONT_UI, 8, QFont.Weight.Bold))
@@ -4542,6 +4550,7 @@ class MainWindow(QMainWindow):
         self._confirm_hide_sig.connect(self._hide_confirm_banner)
         self._cam_stream_sig.connect(self._on_cam_stream)
         self._cam_frame_sig.connect(self._on_cam_frame)
+        self._security_sig.connect(self._on_security_event)
         self._wake_btns_sig.connect(self._refresh_wake_btns)
         self._video_open_sig.connect(self._on_video_open)
         self._video_close_sig.connect(self._on_video_close)
@@ -4586,7 +4595,28 @@ class MainWindow(QMainWindow):
         )
 
     # --- Live camera stream in HUD area ------------------------------------
+    def _on_security_event(self, event):
+        generation, kind, value = event
+        if generation < self._security_generation:
+            return
+        self._security_generation = generation
+        if kind == "start":
+            self._cam_stop.set()
+            if self._video_player:
+                self._on_video_close()
+            self._security_active = True
+            self._cam_title.setText(value)
+            self._hud_cam_stack.setCurrentIndex(1)
+        elif kind == "frame" and self._security_active:
+            self._on_cam_frame(value)
+        elif kind == "end":
+            self._security_active = False
+            self._on_cam_stream(False)
+            self.write_log("SYS: Transmissão da câmera encerrada.")
+
     def _on_cam_stream(self, start: bool) -> None:
+        if self._security_active:
+            return
         if start:
             self._hud_cam_stack.setCurrentIndex(1)
         else:
@@ -4606,6 +4636,10 @@ class MainWindow(QMainWindow):
                 )
 
     def start_camera_stream(self) -> None:
+        from core.rtsp_live import live_camera
+        live_camera.stop()
+        self._security_active = False
+        self._security_generation = live_camera._generation
         self._cam_stop.clear()
         self._cam_stream_sig.emit(True)
         t = threading.Thread(target=self._cam_loop, daemon=True, name="cam-stream")
@@ -4648,6 +4682,11 @@ class MainWindow(QMainWindow):
             self._cam_stream_sig.emit(False)
 
     def stop_camera_stream(self) -> None:
+        from core.rtsp_live import live_camera
+        live_camera.stop()
+        self._security_generation = live_camera._generation
+        self._security_active = False
+        self._cam_stream_sig.emit(False)
         self._cam_stop.set()
         from core.camera_frames import clear
         clear()
@@ -4664,7 +4703,7 @@ class MainWindow(QMainWindow):
                            "install.")
             return
         # A video and the live camera cannot share the centre of the HUD.
-        self._cam_stop.set()
+        self.stop_camera_stream()
 
         self._video_title.setText(f"▶  {(title or 'VIDEO')[:44].upper()}")
         self._video_split = bool(audio_source)
@@ -6975,9 +7014,19 @@ class _RootShim:
 
 class JarvisUI:
     def __init__(self, face_path: str, size=None):
+        if platform.system() == "Windows":
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("EvaldoHarris.Jarvis.Desktop")
         self._app = QApplication.instance() or QApplication(sys.argv)
+        self._app.setApplicationName("JARVIS")
+        icon_path = Path(__file__).resolve().parent / "config" / "jarvis.ico"
+        if not icon_path.exists():
+            MainWindow._build_jarvis_icon(icon_path)
+        icon = QIcon(str(icon_path))
+        self._app.setWindowIcon(icon)
         self._app.setStyle("Fusion")
         self._win = MainWindow(face_path)
+        self._win.setWindowIcon(icon)
         self.root = _RootShim(self._app)
         self._win.show()
 
@@ -7180,6 +7229,14 @@ class JarvisUI:
     def show_camera_frame(self, img_bytes: bytes):
         """Thread-safe: show a webcam frame in the small overlay (screen captures)."""
         self._win._camera_sig.emit(img_bytes)
+
+    def start_security_camera(self, camera):
+        """Decode RTSP off-thread; only queued signals touch the live HUD."""
+        from core.rtsp_live import live_camera
+        return live_camera.start(camera, self._win._security_sig.emit)
+
+    def stop_security_camera(self):
+        self._win.stop_camera_stream()
 
     def show_video(self, source: str, title: str = "", muted: bool = True,
                    audio_source: str = "") -> None:

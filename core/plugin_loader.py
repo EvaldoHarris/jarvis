@@ -151,6 +151,7 @@ class PluginRegistry:
                 "fields":    rec.settings.get("fields", []),
                 "values":    get_plugin_config(ns),
                 "action":    rec.settings.get("action"),   # optional test/connect button
+                "actions":   rec.settings.get("actions", []),
             })
         return out
 

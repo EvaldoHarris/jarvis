@@ -7,6 +7,8 @@
 # ── Secrets. Committing any of these publishes them. ──────────────────────────
 # your Gemini API key, plus per-plugin credentials
 config/api_keys.json
+config/dashboard_devices.json
+config/dashboard_devices.tmp
 
 # Local biometric profiles and downloaded recognition models
 memory/identities/

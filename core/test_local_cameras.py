@@ -79,6 +79,59 @@ class LocalCameraTests(unittest.TestCase):
         self.assertEqual([c["host"] for c in configs], ["192.168.15.73", "192.168.15.149"])
         self.assertTrue(all(not c["username"] and not c["password"] for c in configs))
 
+    def test_unique_vendor_aliases_and_duplicate_vendor_rejection(self):
+        devices = cameras._cameras({})
+        for alias in ("Intelbras", "DVR Intelbras", "camera da Intelbras"):
+            self.assertIs(cameras._resolve(alias, devices), devices[1])
+        self.assertIs(cameras._resolve("iCSee", devices), devices[0])
+        with self.assertRaises(ValueError):
+            cameras._resolve("Intelbras", [devices[1], dict(devices[1], name="Outro DVR")])
+
+    def test_intelbras_channel_twelve_routes_to_live_device(self):
+        player = Mock()
+        with patch.object(cameras, "_cameras", return_value=cameras._cameras({})):
+            cameras.run({"action": "live", "camera": "Intelbras", "channel": 12}, player)
+            selected = player.start_security_camera.call_args.args[0]
+            self.assertEqual(selected["vendor"], "intelbras")
+            self.assertEqual(selected["channel"], 12)
+            cameras.run({"action": "live", "camera": "Intelbras canal 12"}, player)
+            self.assertEqual(player.start_security_camera.call_args.args[0]["channel"], 12)
+
+    def test_offline_camera_does_not_fail_other_device_test(self):
+        devices = [dict(self.camera, name="Offline"), dict(self.camera, name="DVR")]
+        with patch.object(cameras, "_cameras", return_value=devices), \
+                patch.object(cameras, "snapshot", side_effect=[RuntimeError(), b"image"]) as capture:
+            success, message = cameras._test({})
+        self.assertTrue(success)
+        self.assertIn("1/2", message)
+        self.assertIn("DVR:", message)
+        self.assertEqual(capture.call_count, 2)
+
+    def test_dvr_channel_selection_uses_same_credentials_without_mutating_default(self):
+        device = dict(self.camera, vendor="intelbras", name="DVR", channel_count="16")
+        with patch.object(cameras, "_cameras", return_value=[device]), \
+                patch.object(cameras, "snapshot", return_value=b"image") as capture:
+            result = cameras.run({"action": "test", "camera": "DVR", "channel": 8})
+        selected = capture.call_args.args[0]
+        self.assertIn("channel=8&subtype=1", rtsp_capture.build_url(selected))
+        self.assertEqual(selected["password"], device["password"])
+        self.assertEqual(device["channel"], 1)
+        self.assertIn("channel=8", result)
+
+    def test_invalid_or_out_of_range_channel_does_not_connect(self):
+        device = dict(self.camera, name="DVR", channel_count="8")
+        for channel in (0, 9, 65, -1, True, 1.5, "2&subtype=0"):
+            with self.subTest(channel=channel), \
+                    patch.object(cameras, "_cameras", return_value=[device]), \
+                    patch.object(cameras, "snapshot") as capture:
+                cameras.run({"action": "preview", "camera": "DVR", "channel": channel})
+                capture.assert_not_called()
+
+    def test_unknown_channel_count_allows_explicit_channel_without_inventing_count(self):
+        device = dict(self.camera, channel_count="")
+        self.assertEqual(cameras._select_channel(device, 16)["channel"], 16)
+        self.assertEqual(cameras._select_channel(device)["channel"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

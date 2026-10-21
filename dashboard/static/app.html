@@ -202,9 +202,31 @@
     }
 
     function _authHeader() { return { 'Authorization': `Bearer ${_authToken}` }; }
-    function _authFetch(url, opts = {}) {
+    async function _authFetch(url, opts = {}) {
       opts.headers = Object.assign({}, opts.headers, _authHeader());
-      return fetch(url, opts);
+      const response=await fetch(url, opts);
+      if(response.status===401)_reconnectPanel();
+      return response;
+    }
+
+    let _reconnecting=false;
+    function _reconnectPanel(){
+      if(_reconnecting)return;
+      _reconnecting=true;
+      const device=localStorage.getItem('jarvis_device_token');
+      if(!device){location.replace('/login');return;}
+      async function attempt(){
+        try{
+          const response=await fetch('/api/device-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_token:device}),signal:AbortSignal.timeout(5000)});
+          if(response.status===401){localStorage.removeItem('jarvis_device_token');location.replace('/login');return;}
+          if(!response.ok)throw Error('offline');
+          const data=await response.json();
+          sessionStorage.setItem('jarvis_token',data.token);
+          sessionStorage.setItem('jarvis_key',data.key);
+          location.replace('/');
+        }catch{setTimeout(attempt,2000);}
+      }
+      attempt();
     }
 
     // ── AES-256-GCM encryption (Web Crypto) ──────────────────────────────────
@@ -289,7 +311,7 @@
     const ws       = new WebSocket(_wsUrl);
 
     ws.onopen    = () => { sys('Painel remoto conectado.'); toast('Conectado ao Jarvis'); };
-    ws.onclose   = () => sys('Connection lost — refresh to reconnect.');
+    ws.onclose   = () => {sys('Aguardando o Jarvis para reconectar automaticamente…');_reconnectPanel();};
     ws.onerror   = () => sys('Erro de conex?o.');
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);

@@ -4,6 +4,8 @@ import json
 import os
 import subprocess
 import sys
+import struct
+import time
 from urllib.parse import quote
 
 
@@ -71,6 +73,25 @@ def _worker():
         ])
         if not opened:
             return 2
+        if payload.get("live"):
+            last = 0.
+            while True:
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    return 3
+                now = time.monotonic()
+                if now - last < .1:
+                    continue
+                last = now
+                height, width = frame.shape[:2]
+                scale = min(1., 1280 / width, 720 / height)
+                if scale < 1:
+                    frame = cv2.resize(frame, (int(width*scale), int(height*scale)))
+                ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                if ok:
+                    data = jpeg.tobytes()
+                    sys.stdout.buffer.write(struct.pack("!I", len(data)) + data)
+                    sys.stdout.buffer.flush()
         ok, frame = cap.read()
         if not ok or frame is None:
             return 3

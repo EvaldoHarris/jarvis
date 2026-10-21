@@ -861,8 +861,22 @@ o Jarvis relata essa limitação e não repete o comando automaticamente.
 
 ### Acesso direto às câmeras locais
 
-O plugin `cameras_locais` permite capturar uma imagem diretamente por RTSP,
-sem abrir o VMS. Após reiniciar o Jarvis, abra **Config. de plugins → CÂMERAS
+O plugin `cameras_locais` permite capturar uma imagem diretamente por RTSP
+ou localizar possíveis dispositivos com “Busque câmeras na rede” (`discover`).
+A mesma busca está em **Config. de plugins → Câmeras locais → BUSCAR CÂMERAS NA REDE**.
+Ela verifica portas RTSP e de DVR nas redes IPv4 privadas ativas do computador,
+sem tentar senhas, capturar imagens ou cadastrar dispositivos automaticamente.
+Redes maiores são limitadas ao /24 do computador; interfaces virtuais comuns são ignoradas.
+Os resultados são candidatos, não confirmação de vídeo ou fabricante.
+
+Para assistir ao vídeo ao vivo no painel central, use a ação `live`, sem abrir o VMS. Para DVRs,
+informe `channel` (começando em 1); uma nova chamada troca o canal exibido.
+Exemplo: “Mostre ao vivo o canal 3 da Intelbras”. A ação `stop`, o botão
+FECHAR ou “feche a câmera” encerram a transmissão e devolvem o espaço ao reator.
+O vídeo é local, sem áudio, gravação ou envio contínuo à IA. A análise pela IA
+continua sendo solicitada separadamente com `analyze`. A quantidade de canais
+pode ser definida nas configurações do plugin; não é descoberta automaticamente.
+Após reiniciar o Jarvis, abra **Config. de plugins → CÂMERAS
 LOCAIS — RTSP DIRETO**. Dois dispositivos descobertos nesta instalação estão
 pré-preenchidos: `192.168.15.73` (iCSee/XM) e `192.168.15.149` (Intelbras).
 Renomeie-os conforme o local e preencha o usuário e a senha **do dispositivo**,
@@ -876,7 +890,7 @@ O acesso direto desta integração exige executar o Jarvis pelo Python.
 
 Comandos: “liste as câmeras locais”, “teste a câmera iCSee”, “mostre a câmera
 Intelbras” (imagem local) ou “analise a câmera Intelbras” (imagem enviada à IA).
-Cada pedido captura uma imagem, não um vídeo contínuo. O áudio da conversa e
+`preview` e `analyze` capturam uma imagem; `live` mantém o vídeo aberto. O áudio da conversa e
 os resultados textuais seguem o provedor do Jarvis mesmo na prévia local.
 
 As credenciais ficam em `config/api_keys.json`, ignorado pelo Git. Elas são
