@@ -1,0 +1,12 @@
+﻿<resources>
+    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#00E5FF</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#040A16</item>
+        <item name="android:navigationBarColor">#040A16</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+    <string name="accessibility_description">Permite ao JARVIS ler a tela e executar toques, gestos e digitaÃ§Ã£o quando vocÃª solicitar. Capturas usadas na anÃ¡lise sÃ£o enviadas ao provedor de IA configurado. O PC sÃ³ controla este celular quando a conexÃ£o remota estÃ¡ ativada. VocÃª pode desativar este serviÃ§o a qualquer momento.</string>
+</resources>
+

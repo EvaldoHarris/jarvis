@@ -668,6 +668,36 @@ class _Throttle:
             self._fails.pop(who, None)
 
 
+async def _direct_public_ca():
+    from core.direct_secure import authority, pem
+    authority.initialize()
+    return JSONResponse({"ca":pem(authority.ca)}, headers={"Cache-Control":"no-store"})
+
+
+async def _direct_enroll_request(req: Request):
+    """Local bootstrap only: body and reply are authenticated with the QR secret."""
+    import ipaddress
+    from core.direct_secure import authority
+    try:
+        address = ipaddress.ip_address(req.client.host)
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+            address = address.ipv4_mapped
+        if not (address.is_private or address.is_loopback or address in ipaddress.ip_network('100.64.0.0/10')):
+            return JSONResponse({"code":"local_network_required"},status_code=403)
+        raw = await req.body()
+        if len(raw)>8192:
+            return JSONResponse({"code":"invalid_invitation"},status_code=400)
+        result = await asyncio.to_thread(authority.enroll,json.loads(raw))
+        return JSONResponse(result,headers={"Cache-Control":"no-store"})
+    except ValueError as exc:
+        # Report actionable categories, without disclosing credentials or request bodies.
+        reason = str(exc)
+        code = "invitation_expired" if reason == "Convite expirado ou desconhecido" else "invitation_used" if reason == "Convite já utilizado por outro pedido" else "invalid_invitation"
+        return JSONResponse({"code":code},status_code=403,headers={"Cache-Control":"no-store"})
+    except Exception:
+        return JSONResponse({"code":"invalid_invitation"},status_code=403,headers={"Cache-Control":"no-store"})
+
+
 class DashboardServer:
 
     def __init__(self, device_store_path=None):
@@ -696,6 +726,9 @@ class DashboardServer:
         self._server = None
         self._panel_state_callback = None
         self._panel_control_callback = None
+        from core.android_bridge import bridge
+        self.android_bridge = bridge
+        self._android_apk_path = BASE_DIR / "dist" / "JARVIS-Android-debug.apk"
         self._login_html                  = _read("login.html")
         self._app_html                    = _read("app.html")
         self.app                          = self._build_app()
@@ -897,6 +930,54 @@ class DashboardServer:
             mesh = get_head_mesh()
             return JSONResponse({key: mesh[key].tolist() for key in ("verts", "edges", "jaw")})
 
+        app.add_api_route("/api/direct/enroll", _direct_enroll_request, methods=["POST"])
+        app.add_api_route("/api/direct/ca", _direct_public_ca, methods=["GET"])
+
+        @app.post("/api/continuity/sync")
+        async def continuity_sync(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            from core import continuity_runtime as shared
+            from core.continuity import store
+            if not shared.config()['enabled'] or shared.config()['role'] != 'hub':
+                return JSONResponse({"error": "This PC is not the shared hub"}, status_code=409)
+            raw = await req.body()
+            if len(raw) > 2_000_000:
+                return JSONResponse({"error": "Sync payload too large"}, status_code=413)
+            try:
+                body = json.loads(raw)
+                await asyncio.to_thread(shared.bridge_memory)
+                result = await asyncio.to_thread(store.sync, body)
+                await asyncio.to_thread(shared.bridge_memory)
+                return JSONResponse(result, headers={"Cache-Control": "no-store"})
+            except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                return JSONResponse({"error": str(exc)}, status_code=409)
+
+        @app.get("/api/tasks")
+        async def tasks_state(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            from core.task_control import panel_state
+            return JSONResponse(panel_state(), headers={"Cache-Control": "no-store"})
+
+        @app.post("/api/tasks")
+        async def tasks_control(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            from core.task_control import control, panel_state
+            try:
+                data = await req.json()
+                plan = control(data)
+            except (ValueError, TypeError) as exc:
+                return JSONResponse({"error": str(exc)}, status_code=409)
+            if data['action'] in ('pause', 'cancel') and self._panel_control_callback:
+                self._panel_control_callback('interrupt', None)
+            if data['action'] == 'resume':
+                await self._command_queue.put(f"Continue o plano salvo {plan['id']}. Leia task_plan status e confira os aplicativos antes de prosseguir.")
+                if self._wake_callback:
+                    self._wake_callback()
+            return JSONResponse(panel_state(), headers={"Cache-Control": "no-store"})
+
         @app.post("/api/control")
         async def panel_control(req: Request):
             if not _auth(req):
@@ -1073,7 +1154,16 @@ class DashboardServer:
             else:
                 text = (body.get("text") or "").strip()
             if text:
-                await self._command_queue.put(text)
+                device = body.get("reply_device")
+                request_id = body.get("reply_id")
+                if device is not None:
+                    if not isinstance(device, str) or not isinstance(request_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{8,80}", request_id):
+                        return JSONResponse({"error": "Invalid Android reply target"}, status_code=400)
+                    if device not in {item["id"] for item in self.android_bridge.list_devices()}:
+                        return JSONResponse({"error": "Android reply connection unavailable"}, status_code=409)
+                    await self._command_queue.put({"text": text, "reply_device": device, "reply_id": request_id})
+                else:
+                    await self._command_queue.put(text)
                 if self._wake_callback:
                     self._wake_callback()
             return JSONResponse({"ok": True})
@@ -1202,6 +1292,72 @@ class DashboardServer:
                 return JSONResponse({"error": "Not found"}, status_code=404)
             return FileResponse(str(path), filename=safe)
 
+        @app.get("/api/android/devices")
+        async def android_devices(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            return JSONResponse({"devices": self.android_bridge.list_devices()}, headers={"Cache-Control": "no-store"})
+
+        @app.get("/api/android/apk")
+        async def android_apk(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            if not self._android_apk_path.is_file():
+                return JSONResponse({"error": "Compile o APK Android neste computador primeiro."}, status_code=404)
+            return FileResponse(str(self._android_apk_path), filename="JARVIS-Android-debug.apk",
+                                media_type="application/vnd.android.package-archive", headers={"Cache-Control": "no-store"})
+
+        @app.post("/api/android/home-config")
+        async def android_home_config(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            from core.mobile_export import home_config
+            return JSONResponse(home_config(), headers={"Cache-Control": "no-store"})
+
+        @app.post("/api/android/memories")
+        async def android_memories(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            from core.mobile_export import memories
+            return JSONResponse(memories(), headers={"Cache-Control": "no-store"})
+
+        @app.websocket("/ws/android")
+        async def android_ws(websocket: WebSocket):
+            token = websocket.headers.get("authorization", "").removeprefix("Bearer ").strip()
+            if not _valid(token):
+                await websocket.close(code=4001)
+                return
+            await websocket.accept()
+            device_id = ""
+            try:
+                hello = await asyncio.wait_for(websocket.receive_json(), 10)
+                if not isinstance(hello, dict):
+                    await websocket.close(code=4002)
+                    return
+                device_id = str(hello.get("device_id", ""))
+                if hello.get("type") != "hello" or not re.fullmatch(r"[a-zA-Z0-9_-]{8,80}", device_id):
+                    await websocket.close(code=4002)
+                    return
+                await self.android_bridge.attach(websocket, device_id, str(hello.get("name") or "Android"), lambda: _valid(token))
+                from memory.config_manager import get_voice
+                from core.gemini import live_model
+                await websocket.send_json({"type": "ready", "device_id": device_id,
+                                           "voice_name": get_voice(), "voice_model": live_model()})
+                while _valid(token):
+                    message = await websocket.receive_json()
+                    if not isinstance(message, dict):
+                        continue
+                    if message.get("type") == "result":
+                        self.android_bridge.reply(device_id, message)
+                    elif message.get("type") == "ping":
+                        await websocket.send_json({"type": "pong", "voice_name": get_voice(), "voice_model": live_model()})
+                await websocket.close(code=4001)
+            except (WebSocketDisconnect, asyncio.TimeoutError, ValueError):
+                pass
+            finally:
+                if device_id:
+                    self.android_bridge.detach(websocket, device_id)
+
         @app.websocket("/ws")
         async def ws_ep(websocket: WebSocket, token: str = ""):
             tok = token.strip()
@@ -1260,9 +1416,19 @@ class DashboardServer:
         path on the HTTPS port. Typing the address by hand now works, which is
         what people do when a QR code is inconvenient.
         """
-        from fastapi.responses import RedirectResponse
+        bounce = self._build_redirect_app()
 
+        cfg = uvicorn.Config(bounce, host="0.0.0.0", port=PORT,
+                             log_level="warning", use_colors=False)
+        print(f"[Dashboard] Type by hand:  {self._ip}:{PORT}  "
+              f"(sends you to the secure page)")
+        await uvicorn.Server(cfg).serve()
+
+    def _build_redirect_app(self):
+        from fastapi.responses import RedirectResponse
         bounce = FastAPI(docs_url=None, redoc_url=None)
+        bounce.add_api_route("/api/direct/enroll", _direct_enroll_request, methods=["POST"])
+        bounce.add_api_route("/api/direct/ca", _direct_public_ca, methods=["GET"])
 
         @bounce.get("/{path:path}")
         async def _to_https(path: str, request: Request):
@@ -1271,11 +1437,7 @@ class DashboardServer:
                 f"https://{self._ip}:{SECURE_PORT}/{path}{query}",
                 status_code=307)
 
-        cfg = uvicorn.Config(bounce, host="0.0.0.0", port=PORT,
-                             log_level="warning", use_colors=False)
-        print(f"[Dashboard] Type by hand:  {self._ip}:{PORT}  "
-              f"(sends you to the secure page)")
-        await uvicorn.Server(cfg).serve()
+        return bounce
 
     async def serve(self) -> None:
         """Keep startup failures visible to the remote-control dialog."""

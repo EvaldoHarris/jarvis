@@ -1,4 +1,5 @@
 :root{--bg:#030b12;--surface:#06131e;--accent:#00d9ee;--adim:#00d9ee0d;--text:#d8f7ff;--muted:#85a5b5;--border:#144251;--green:#00e7a0;--pink:#ff326c}
+.task-card{padding:12px;border-bottom:1px solid var(--border);flex-shrink:0;font-size:12px}.task-card pre{white-space:pre-wrap;max-height:100px;overflow:auto;font-size:11px;margin:6px 0}.task-buttons{display:flex;gap:6px}.task-buttons button{font-size:10px;flex:1}
 html,body{height:100%;height:100dvh;overflow:hidden;background:radial-gradient(ellipse at 30% 25%,#082134,transparent 60%),#030b12;font-family:'Segoe UI',sans-serif}
 body{display:grid;grid-template-rows:66px minmax(0,1fr) auto auto;background-size:100% 100%}
 header{padding:12px 22px;gap:12px;background:#040e18e8;border-bottom:1px solid var(--accent)}

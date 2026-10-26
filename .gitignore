@@ -7,6 +7,8 @@
 # ── Secrets. Committing any of these publishes them. ──────────────────────────
 # your Gemini API key, plus per-plugin credentials
 config/api_keys.json
+config/google_token.bin
+config/google_token.tmp
 config/dashboard_devices.json
 config/dashboard_devices.tmp
 
@@ -30,6 +32,7 @@ config/whatsapp_web/
 # ── Personal data the assistant accumulates about you ─────────────────────────
 memory/long_term.json
 memory/*.db
+memory/*.db-*
 
 # ── Python build noise ────────────────────────────────────────────────────────
 __pycache__/
@@ -61,3 +64,15 @@ logs/
 downloads/
 screenshots/
 config/api_keys.json
+
+# Shared Jarvis profile and private pairing
+config/continuity.json
+config/continuity_token.bin
+memory/continuity.db*
+
+# Direct TLS private authority and enrollment artifacts
+config/direct/
+*.jarvis
+
+config/direct_client*.bin
+config/direct_client*.tmp

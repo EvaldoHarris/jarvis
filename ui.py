@@ -5574,6 +5574,23 @@ class MainWindow(QMainWindow):
         remote_btn.clicked.connect(self._open_remote)
         lay.addWidget(remote_btn)
 
+        task_btn = QPushButton("TAREFAS E PROGRESSO")
+        task_btn.setStyleSheet(_BTN_STYLE_PRI)
+        task_btn.clicked.connect(self._open_task_panel)
+        lay.addWidget(task_btn)
+        direct_btn = QPushButton("CANAL DIRETO PROTEGIDO")
+        direct_btn.setStyleSheet(_BTN_STYLE_PRI)
+        direct_btn.clicked.connect(self._open_direct_panel)
+        lay.addWidget(direct_btn)
+        shared_btn = QPushButton("UM SÓ JARVIS — MEUS DISPOSITIVOS")
+        shared_btn.setStyleSheet(_BTN_STYLE_PRI)
+        shared_btn.clicked.connect(self._open_continuity_panel)
+        lay.addWidget(shared_btn)
+        google_btn = QPushButton("GOOGLE AGENDA E GMAIL")
+        google_btn.setStyleSheet(_BTN_STYLE_PRI)
+        google_btn.clicked.connect(self._open_google_panel)
+        lay.addWidget(google_btn)
+
         sc_btn = QPushButton("⊞  CRIAR ATALHO NA ÁREA DE TRABALHO")
         sc_btn.setFixedHeight(26)
         sc_btn.setFont(QFont(FONT_UI, 7))
@@ -6297,6 +6314,34 @@ class MainWindow(QMainWindow):
     def notify_phone_connected(self) -> None:
         if self._remote_overlay and self._remote_overlay.isVisible():
             self._remote_overlay.mark_connected()
+
+    def _open_task_panel(self):
+        from core.task_panel import TaskPanel
+        if not getattr(self, '_task_panel', None):
+            self._task_panel = TaskPanel(self)
+        self._task_panel.show()
+        self._task_panel.raise_()
+
+    def _open_direct_panel(self):
+        from core.direct_panel import DirectPanel
+        if not getattr(self, '_direct_panel', None):
+            self._direct_panel = DirectPanel(self)
+        self._direct_panel.show()
+        self._direct_panel.raise_()
+
+    def _open_continuity_panel(self):
+        from core.continuity_panel import ContinuityPanel
+        if not getattr(self, '_continuity_panel', None):
+            self._continuity_panel = ContinuityPanel(self)
+        self._continuity_panel.show()
+        self._continuity_panel.raise_()
+
+    def _open_google_panel(self):
+        from core.google_panel import GooglePanel
+        if not getattr(self, '_google_panel', None):
+            self._google_panel = GooglePanel(self)
+        self._google_panel.show()
+        self._google_panel.raise_()
 
     def _open_remote(self):
         if not self.on_remote_clicked:

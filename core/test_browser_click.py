@@ -64,6 +64,20 @@ class BrowserClickTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.page.url, "about:blank")
         self.assertEqual(await self.page.locator("body").get_attribute("data-clicked"), "1")
         self.assertNotIn('method=destination_from_dom', result)
+        self.assertIn('status=unverified', result)
+        self.assertNotIn('status=done', result)
+
+    async def test_verify_checks_visible_exact_text_without_clicking(self):
+        await self.page.set_content('<button onclick="document.body.dataset.clicked=1">Concluido</button>')
+        result = await self.session.verify("Concluido")
+        self.assertIn('status=done', result)
+        self.assertIn('verified_scope=visible_text_only', result)
+        self.assertIsNone(await self.page.locator('body').get_attribute('data-clicked'))
+
+    async def test_verify_rejects_hidden_and_partial_evidence(self):
+        await self.page.set_content('<p hidden>Concluido</p><p>Quase concluido</p>')
+        result = await self.session.verify("Concluido")
+        self.assertIn('status=unverified', result)
 
     async def test_links_exposes_actual_names_and_destinations(self):
         await self.page.set_content('<h2>Golden Garden</h2>'

@@ -12,7 +12,7 @@ class VisualLaunchTests(unittest.TestCase):
         self.mouse = Mock()
         self.mouse.size.return_value = (1920, 1080)
         self.find = Mock()
-        self.candidate = SimpleNamespace(label="Example")
+        self.candidate = SimpleNamespace(label="Example", name="Example.exe")
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.stack.enter_context(patch.object(apps, "_PYAUTOGUI", True))

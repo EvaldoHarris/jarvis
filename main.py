@@ -153,6 +153,8 @@ def _pcm_level(samples) -> float:
 # Extra time beyond the device's reported output latency before the microphone
 # is trusted again: covers room decay and the speaker's own settling.
 _TAIL_MARGIN = 0.25
+# Seconds of silence after which the mic is released even without turn_complete.
+_MIC_RELEASE_FALLBACK = 8.0
 
 # How long a sent turn may go unanswered before the session is presumed dead.
 #
@@ -273,7 +275,8 @@ def _describe_tools(declarations) -> str:
         if name == "computer_control":
             lines.append(
                 "  You can operate the mouse and keyboard through this tool. "
-                "For a named visible contact, group or button, call "
+                "For native Windows apps prefer desktop_accessibility if listed. "
+                "When accessibility does not expose a named visible contact, group or button, call "
                 "computer_control with action=screen_click, target=the exact "
                 "name and description=the screen context. The tool locates "
                 "the target itself; you do not need to know its coordinates. "
@@ -956,13 +959,12 @@ class JarvisLive:
         if self._wake_enabled and not self._awake:
             self.ui.write_log("SYS: I'm asleep — say 'Hey Jarvis' or tap WAKE NOW first.")
             return
-        asyncio.run_coroutine_threadsafe(
-            self.session.send_client_content(
-                turns={"role": "user", "parts": [{"text": text}]},
-                turn_complete=True
-            ),
-            self._loop
-        )
+        async def send_shared_text():
+            await self.session.send_client_content(
+                turns={"role": "user", "parts": [{"text": text}]}, turn_complete=True)
+            from core.continuity_runtime import remember_turn
+            await asyncio.to_thread(remember_turn, "user", text)
+        asyncio.run_coroutine_threadsafe(send_shared_text(), self._loop)
 
     def _tail_active(self) -> bool:
         """True while the speakers may still be finishing our last sentence."""
@@ -1058,6 +1060,11 @@ class JarvisLive:
     def interrupt(self) -> None:
         """Stop JARVIS mid-speech: drain queued audio and open mic immediately."""
         self._interrupted = True
+        try:
+            from core.routines import pause_running_routine
+            pause_running_routine()
+        except Exception as exc:
+            print(f"[Routines] Could not persist interruption: {exc}")
         q = self.audio_in_queue
         if q:
             drained = 0
@@ -1116,6 +1123,8 @@ class JarvisLive:
         memory     = load_memory()
         mem_str    = format_memory_for_prompt(memory)
         sys_prompt = _load_system_prompt()
+        from core.continuity_runtime import context as shared_context
+        sys_prompt += shared_context()
 
         now      = datetime.now()
         time_str = now.strftime("%A, %B %d, %Y — %I:%M %p")
@@ -1203,6 +1212,16 @@ class JarvisLive:
         })
 
         parts = [time_ctx, identity_ctx]
+        if "routine_control" in _names:
+            from core.routines import routine_context
+            routines_context = routine_context()
+            if routines_context:
+                parts.append(routines_context)
+        if "task_plan" in _names:
+            from core.task_plan import recovery_context
+            task_context = recovery_context()
+            if task_context:
+                parts.append(task_context)
         if mem_str:
             parts.append(mem_str)
         parts.append(sys_prompt)
@@ -1734,6 +1753,11 @@ class JarvisLive:
                             # Split into ~50 ms chunks so interrupt() stops audio within 50 ms
                             # (24000 Hz × 2 bytes/sample × 0.05 s = 2400 bytes per slice)
                             _audio_data = response.data
+                            phone_reply = getattr(self, "_android_reply", None)
+                            if phone_reply and self._dashboard:
+                                sent = await self._dashboard.android_bridge.deliver_audio(
+                                    phone_reply["reply_device"], phone_reply["reply_id"], _audio_data)
+                                phone_reply["audio_streamed"] = bool(sent) or phone_reply.get("audio_streamed", False)
                             _SLICE = 2400
                             for _i in range(0, len(_audio_data), _SLICE):
                                 self.audio_in_queue.put_nowait(_audio_data[_i : _i + _SLICE])
@@ -1795,6 +1819,9 @@ class JarvisLive:
                                         "text": full_in,
                                         "ts": datetime.now().isoformat(),
                                     }))
+                            if full_in:
+                                from core.continuity_runtime import remember_turn
+                                await asyncio.to_thread(remember_turn, "user", full_in)
                             in_buf = []
 
                             full_out = " ".join(out_buf).strip()
@@ -1808,13 +1835,30 @@ class JarvisLive:
                                 self._last_out_logged = full_out
                                 self.ui.write_log(f"{self._asst_name}: {full_out}")
                                 self._session_log.append(f"{self._asst_name}: {full_out}")
+                                phone_reply = getattr(self, "_android_reply", None)
+                                if phone_reply and self._dashboard:
+                                    final_reply = getattr(sc, "waiting_for_input", None) is not False
+                                    if final_reply:
+                                        self._android_reply = None
+                                    asyncio.create_task(self._dashboard.android_bridge.deliver_reply(
+                                        phone_reply["reply_device"], phone_reply["reply_id"], full_out,
+                                        audio_streamed=phone_reply.get("audio_streamed", False), final_reply=final_reply))
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
                                         "type": "log", "speaker": "jarvis",
                                         "text": full_out,
                                         "ts": datetime.now().isoformat(),
                                     }))
+                            if full_out:
+                                from core.continuity_runtime import remember_turn
+                                await asyncio.to_thread(remember_turn, "jarvis", full_out)
                             out_buf = []
+                            phone_reply = getattr(self, "_android_reply", None)
+                            if not full_out and phone_reply and self._dashboard and getattr(sc, "waiting_for_input", None) is not False:
+                                self._android_reply = None
+                                asyncio.create_task(self._dashboard.android_bridge.deliver_reply(
+                                    phone_reply["reply_device"], phone_reply["reply_id"], "",
+                                    audio_streamed=phone_reply.get("audio_streamed", False)))
 
                             if self._vision_close_pending:
                                 # This turn_complete IS the vision answer — close camera + release busy flag
@@ -1890,6 +1934,7 @@ class JarvisLive:
         prebuffer = True
         underflows = 0
         playback_clock = PlaybackClock()
+        last_audio_at = 0.0
         try:
             while True:
                 try:
@@ -1899,8 +1944,19 @@ class JarvisLive:
                     )
                 except asyncio.TimeoutError:
                     prebuffer = True
+                    # A short gap in Gemini's audio is not the end of the answer.
+                    # Releasing the microphone there let room noise or our own
+                    # echo reach the model mid-reply, which it took as the user
+                    # speaking and cut the answer off. Wait for turn_complete;
+                    # fall back after a long silence so the mic never stays shut.
+                    _turn_finished = (
+                        self._turn_done_event is None
+                        or self._turn_done_event.is_set()
+                        or time.monotonic() - last_audio_at > _MIC_RELEASE_FALLBACK
+                    )
                     if (
-                        self.audio_in_queue.empty()
+                        _turn_finished
+                        and self.audio_in_queue.empty()
                         and playback_clock.drained(time.monotonic())
                     ):
                         with self._speaking_lock:
@@ -1913,6 +1969,7 @@ class JarvisLive:
                     continue
 
                 self.set_speaking(True)
+                last_audio_at = time.monotonic()
 
                 # Batch all immediately-available chunks into one write to reduce
                 # thread-pool round-trips (was one asyncio.to_thread per 50ms slice).
@@ -2313,6 +2370,9 @@ class JarvisLive:
                 text = await asyncio.wait_for(
                     self._dashboard._command_queue.get(), timeout=0.5
                 )
+                phone_reply = text if isinstance(text, dict) else None
+                if phone_reply:
+                    text = phone_reply["text"]
                 if not text:
                     continue
                 # Wait up to 8s for session to become ready after a wake
@@ -2321,6 +2381,7 @@ class JarvisLive:
                         break
                     await asyncio.sleep(0.1)
                 if self.session:
+                    self._android_reply = phone_reply
                     # A remote command is deliberate control and the phone user
                     # has no desktop WAKE button — so it wakes JARVIS if asleep.
                     if self._wake_enabled and not self._awake:
@@ -2329,8 +2390,13 @@ class JarvisLive:
                         turns={"role": "user", "parts": [{"text": text}]},
                         turn_complete=True,
                     )
+                    from core.continuity_runtime import remember_turn
+                    await asyncio.to_thread(remember_turn, "user", text)
                     self.ui.write_log(f"[Web]: {text}")
                 else:
+                    if phone_reply:
+                        await self._dashboard.android_bridge.deliver_reply(phone_reply["reply_device"],
+                            phone_reply["reply_id"], "O assistente do PC ainda não está conectado à IA. Tente novamente quando ele estiver pronto.")
                     print(f"[Dashboard] Dropped command (no session): {text}")
             except asyncio.TimeoutError:
                 pass
@@ -2483,6 +2549,15 @@ class JarvisLive:
         # for host-API enumeration on the Qt thread.
         audio_devices.prefetch()
 
+        from core.continuity_runtime import start as start_shared_jarvis
+        start_shared_jarvis()
+        async def run_direct_listener():
+            try:
+                from core.direct_secure import serve
+                await serve()
+            except Exception as exc:
+                self.ui.write_log("SYS: Canal direto protegido indisponível: " + str(exc)[:200])
+        asyncio.create_task(run_direct_listener())
         # Start dashboard (optional — needs: pip install fastapi "uvicorn[standard]" cryptography)
         try:
             from dashboard.server import DashboardServer

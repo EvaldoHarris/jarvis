@@ -159,7 +159,9 @@ class ActionRegistry:
         if rec is None or not rec.valid:
             return f"Action '{name}' is not available."
         try:
-            return _call_handler(rec.handler, parameters, ctx or {}) or "Done."
+            result = _call_handler(rec.handler, parameters, ctx or {}) or "Done."
+            from core.task_plan import attach_receipt
+            return attach_receipt(name, result, parameters)
         except Exception as e:
             self._logger(f"Action '{name}' crashed during run(): {e}")
             traceback.print_exc()

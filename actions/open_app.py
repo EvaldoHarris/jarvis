@@ -273,7 +273,7 @@ def _open_visible_app(spoken: str):
             pyautogui.click(x, y, clicks=clicks, interval=0.12)
             deadline = time.monotonic() + 4.0
             while time.monotonic() < deadline:
-                for candidate in appidentity.running(spoken, include_self=True)[:8]:
+                for candidate in appidentity.exact_candidates(spoken, appidentity.running(spoken, include_self=True))[:8]:
                     if appidentity.focus(candidate):
                         return candidate
                 time.sleep(0.25)
@@ -286,7 +286,7 @@ def _open_visible_app(spoken: str):
 
 
 def _launch_and_verify(player, spoken: str, launcher_name: str,
-                       before: set[int]) -> None:
+                       before: set[int]) -> str:
     """The part that takes seconds. Speaks ONLY when something needs saying.
 
     Silence means it worked: the window is on the user's screen and a second
@@ -297,7 +297,7 @@ def _launch_and_verify(player, spoken: str, launcher_name: str,
         visible = _open_visible_app(spoken)
         if visible is not None:
             _log(player, f"JARVIS: {visible.label} opened from its visible icon.")
-            return
+            return outcome.done('open_app', app=spoken, matched=visible.label, focused=True, verified=True)
         launcher = _LAUNCHERS[_SYSTEM]
         requested = launcher(launcher_name)
         if not requested and launcher_name.lower() != spoken.lower():
@@ -308,7 +308,9 @@ def _launch_and_verify(player, spoken: str, launcher_name: str,
         )
         if appeared is not None:
             _log(player, f"JARVIS: {appeared.label} is open.")
-            return
+            if appidentity.focus(appeared):
+                return outcome.done('open_app', app=spoken, matched=appeared.label, focused=True, verified=True)
+            return outcome.unverified('open_app', 'Application process appeared, but its window could not be brought to the front.', app=spoken, retry_allowed=False)
 
         if not requested:
             trouble = (f"{spoken} could not be started - nothing on this system "
@@ -322,10 +324,12 @@ def _launch_and_verify(player, spoken: str, launcher_name: str,
         _log(player, f"JARVIS: {trouble}")
         _say(player, "Tell the user, in one short sentence in their own "
                      f"language: {trouble}")
+        return outcome.unverified('open_app', trouble, app=spoken, retry_allowed=False)
     except Exception as exc:
         print(f"[open_app] {type(exc).__name__}: {exc}")
         _say(player, "Tell the user, in one short sentence in their own "
                      f"language: opening {spoken} failed - {exc}")
+        return outcome.unverified('open_app', str(exc), app=spoken, retry_allowed=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -355,7 +359,7 @@ def open_app(parameters=None, response=None, player=None,
     # application the assistant lives inside reports `started` and goes off to
     # launch a second copy of it — seen exactly that way, against a packaged
     # build whose siblings the close guard had just learnt to protect.
-    existing = appidentity.running(spoken, include_self=True)
+    existing = appidentity.exact_candidates(spoken, appidentity.running(spoken, include_self=True))
     if existing:
         best = existing[0]
         # ALREADY RUNNING IS NOT ALREADY DONE.
@@ -399,6 +403,9 @@ def open_app(parameters=None, response=None, player=None,
     before = appidentity.snapshot()
     _log(player, f"JARVIS: Opening {spoken}…")
 
+    if (parameters or {}).get('wait_until_ready') is True:
+        return _launch_and_verify(player, spoken, launcher_name, before)
+
     threading.Thread(
         target=_launch_and_verify,
         args=(player, spoken, launcher_name, before),
@@ -416,6 +423,7 @@ def open_app(parameters=None, response=None, player=None,
 TOOL = {
     "name": "open_app",
     "description": (
+        "For sequential routines use wait_until_ready=true: waits for verified application/window readiness and returns done/unverified instead of started. Do not advance a routine on started or unverified. "
         "Opens an application on this computer. Use whenever the user asks to "
         "open, launch or start any app or program. Put the application's name "
         "in 'app_name' exactly as the user said it. "
@@ -445,6 +453,10 @@ TOOL = {
     "parameters": {
         "type": "OBJECT",
         "properties": {
+            "wait_until_ready": {
+                "type": "BOOLEAN",
+                "description": "Wait for the confirmed app window; use true when a following routine step depends on it. Default false keeps the normal background launch."
+            },
             "app_name": {
                 "type": "STRING",
                 "description": (

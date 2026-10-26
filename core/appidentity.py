@@ -562,6 +562,13 @@ def running(spoken: str, include_self: bool = False) -> list[Match]:
     return out
 
 
+def exact_candidates(spoken: str, candidates: list[Match]) -> list[Match]:
+    """Only executable identities may be focused; tab titles are not apps."""
+    queries = {q.removesuffix("exe") for q in spelling_variants(spoken)}
+    return [m for m in candidates
+            if fold(os.path.splitext(m.name)[0]) in queries]
+
+
 def is_running(pid: int) -> bool:
     """Is this pid still alive? False when the process table cannot be read,
     because every caller uses this to decide whether something CLOSED, and
@@ -601,7 +608,7 @@ def wait_for_launch(spoken: str, before: set[int],
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        for match in running(spoken):
+        for match in exact_candidates(spoken, running(spoken)):
             if match.pid not in before:
                 return match
         time.sleep(poll)
@@ -796,6 +803,13 @@ def focus(match: "Match") -> bool:
 
             user32 = ctypes.WinDLL("user32", use_last_error=True)
             kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            # HWND is pointer-sized on 64-bit Windows; ctypes defaults to int.
+            user32.GetForegroundWindow.restype = wintypes.HWND
+            user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+            user32.BringWindowToTop.argtypes = [wintypes.HWND]
+            user32.IsIconic.argtypes = [wintypes.HWND]
+            user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+            user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
             SW_RESTORE = 9
 
             # WINDOWS REFUSES TO LET A BACKGROUND PROCESS STEAL FOCUS.

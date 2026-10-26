@@ -160,6 +160,15 @@
       </div>
     </section>
     <section class="activity-card" aria-label="Conversa e atividade">
+      <section class="task-card" aria-label="Tarefa atual">
+        <strong id="task-title">TAREFAS</strong>
+        <pre id="task-steps"></pre>
+        <div class="task-buttons">
+          <button class="hud-button" onclick="taskControl('pause')">Pausar</button>
+          <button class="hud-button" onclick="taskControl('resume')">Continuar</button>
+          <button class="hud-button danger" onclick="taskControl('cancel')">Cancelar tarefa</button>
+        </div>
+      </section>
       <div class="card-heading"><span>REGISTRO DE ATIVIDADE</span><span>CONVERSA</span></div>
       <main id="feed" aria-label="Mensagens do Jarvis" aria-live="polite"></main>
     </section>
@@ -188,6 +197,7 @@
         <button class="quick" onclick="document.getElementById('file-inp').click();closePanelActions()">Enviar arquivo<small>Do celular para o computador</small></button>
         <button class="quick" id="remote-wake" onclick="closePanelActions()">Despertar<small>Ativar o assistente no computador</small></button>
         <button class="quick" id="phone-speaker" aria-pressed="false">Ouvir no celular<small>Ativar o áudio das respostas</small></button>
+        <button class="quick" onclick="downloadAndroidApp()">Baixar app Android<small>APK nativo Kotlin — versão de teste</small></button>
       </div>
       <p class="sheet-note">Os atalhos preparam o comando; toque em Enviar para executar. Interromper, microfone e despertar atuam diretamente. Configurações de provedores e plugins continuam no computador.</p>
     </div>

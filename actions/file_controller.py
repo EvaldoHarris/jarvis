@@ -11,6 +11,7 @@ except ImportError:
     _SEND2TRASH = False
 
 from core.undo import push_undo
+from core import outcome
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
 
@@ -645,6 +646,30 @@ def get_file_info(path: str, name: str = "") -> str:
     except Exception as e:
         return f"Could not get file info: {e}"
 
+def verify_file(path, name='', content=None):
+    """Read back a bounded UTF-8 artifact; no write, retry or model inference."""
+    try:
+        target = _resolve_path(path)
+        target = target / name if name else target
+        if not _is_safe_path(target):
+            return outcome.failed('file_verify', 'Access denied')
+        if not isinstance(content, str) or len(content.encode('utf-8')) > 1_000_000:
+            return outcome.failed('file_verify', 'Provide exact expected UTF-8 content, at most 1 MB')
+        expected = content.encode('utf-8')
+        with target.open('rb') as stream:
+            actual = stream.read(len(expected) + 1)
+        # Text writes on Windows use CRLF by default; compare as decoded text
+        # with universal newlines, but retain a strict bound on the read.
+        if actual != expected:
+            with target.open('r', encoding='utf-8', newline=None) as stream:
+                matched = stream.read(len(content) + 1) == content
+            if not matched:
+                return outcome.unverified('file_verify', 'File content differs from the expected artifact; do not overwrite or repeat automatically.', retry_allowed=False)
+        return outcome.done('file_verify', verified_scope='file_text_content', path=str(target.resolve()), characters=len(content))
+    except Exception as exc:
+        return outcome.failed('file_verify', str(exc))
+
+
 def file_controller(
     parameters: dict = None,
     response=None,
@@ -683,6 +708,8 @@ def file_controller(
 
         elif action == "read":
             return read_file(path, name=name)
+        elif action == "verify":
+            return verify_file(path, name=name, content=params.get('content'))
 
         elif action == "write":
             return write_file(
@@ -724,13 +751,13 @@ def file_controller(
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "file_controller",
-    "description": "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, disk usage.",
+    "description": "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, disk usage. After saving a text artifact, verify with path/name and the exact expected content (UTF-8, at most 1 MB); this reads it back without changing it and can produce a task receipt. File existence alone does not verify content.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "list | create_file | create_folder | delete | move | copy | rename | read | write | find | largest | disk_usage | organize_desktop | info"
+                "description": "list | create_file | create_folder | delete | move | copy | rename | read | write | verify | find | largest | disk_usage | organize_desktop | info"
             },
             "path": {
                 "type": "STRING",
@@ -746,7 +773,7 @@ TOOL = {
             },
             "content": {
                 "type": "STRING",
-                "description": "Content for create_file/write"
+                "description": "Content for create_file/write; exact expected text for read-only verify"
             },
             "name": {
                 "type": "STRING",

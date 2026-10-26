@@ -31,7 +31,7 @@ class ScreenFindTests(unittest.TestCase):
     def test_normalized_box_maps_to_capture_pixels(self):
         self.responses('{"box": [100, 400, 300, 500]}')
         self.assertEqual(control._screen_find("GOTAB"), (400, 450))
-        self.assertEqual(self.capture.call_count, 2)
+        self.assertEqual(self.capture.call_count, 3)
 
     def test_monitor_left_of_primary_uses_negative_coordinates(self):
         self.capture.return_value = (Image.new("RGB", (2000, 1000)), -1000, -200)
@@ -61,7 +61,29 @@ class ScreenFindTests(unittest.TestCase):
         self.responses('{"box": [100, 400, 300, 500]}')
         control.computer_control({"action": "screen_click", "description": "GOTAB"})
         self.mouse.click.assert_called_once_with(400, 450, button="left", clicks=1)
-        self.assertEqual(self.call.call_count, 1)
+        self.assertEqual(self.call.call_count, 2)
+
+    def test_wrong_semantic_crop_does_not_move_or_click(self):
+        for action in ('screen_move', 'screen_click'):
+            self.responses('{"box": [100, 400, 300, 500]}', check='NO')
+            result = control.computer_control({'action': action, 'description': 'Ver precos do Hotel Ipora'})
+            self.assertNotIn('status=done', result)
+            self.mouse.click.assert_not_called()
+            self.mouse.moveTo.assert_not_called()
+
+    def test_screen_move_verifies_actual_cursor_position_without_click(self):
+        self.responses('{"box": [100, 400, 300, 500]}')
+        self.mouse.position.return_value = SimpleNamespace(x=400, y=450)
+        result = control.computer_control({'action': 'screen_move', 'description': 'Ver precos do Hotel Ipora'})
+        self.assertIn('status=done', result)
+        self.mouse.moveTo.assert_called_once_with(400, 450, duration=.3)
+        self.mouse.click.assert_not_called()
+
+    def test_target_moving_during_semantic_check_is_rejected(self):
+        self.responses('{"box": [100, 400, 300, 500]}')
+        image = Image.new('RGB', (2000, 1000))
+        self.capture.side_effect = [(image, 0, 0), (image, 0, 0), (Image.new('RGB', (2000, 1000), 'white'), 0, 0)]
+        self.assertIsNone(control._screen_find('GOTAB', verify_label=True))
 
     def test_accessible_target_skips_model(self):
         self.accessible.return_value = (200, 225)

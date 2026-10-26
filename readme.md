@@ -955,3 +955,139 @@ Engineered by a developer building a real-world JARVIS-style assistant.
 | --- | --- |
 | YouTube | [@FatihMakes](https://www.youtube.com/@FatihMakes) |
 | Instagram | [@fatihmakes](https://www.instagram.com/fatihmakes) |
+# Aplicativo Android em Kotlin
+
+O projeto nativo para Android Studio está na pasta [`android`](android/README.md).
+Ele oferece assistente independente no celular, visão por foto/captura de tela
+e controle autenticado nos dois sentidos com o PC. Inclui navegador com DOM e
+visão, câmeras RTSP por canal, luzes Tuya, memórias criptografadas, documentos
+autorizados pelo seletor Android e tarefas com lembretes. Consulte o guia para
+permissões, pareamento, compilação e acesso fora de casa por VPN privada.
+# PC: controle e verificacao de tarefas (21/10/2026)
+
+- **Painel de tarefas:** botao TAREFAS E PROGRESSO nas configuracoes do PC,
+  com objetivo, etapas e pausar/continuar/cancelar. O mesmo estado esta no
+  painel remoto e no Android 0.5.0 (ACOMPANHAR TAREFAS DO PC). A API exige
+  pareamento e confere ID/revisao; continuar envia o pedido ao assistente,
+  sem fingir que a tarefa ja terminou. O PC precisa estar ligado para essas
+  tarefas; as funcoes independentes do Android continuam separadas.
+- **Janelas:** `window_layout` lista janelas e areas uteis reais dos monitores,
+  inclusive coordenadas negativas ou monitores em alturas diferentes. Posiciona
+  uma janela observada em metade/quadrante/area inteira, confere o resultado e
+  registra desfazer protegido. Requer janela visivel e nao minimizada; abra-a
+  antes se necessario. Nao move o Jarvis e nao inventa preferencias de layout.
+- **Google Agenda e Gmail:** integracao oficial com leitura de emails/eventos,
+  envio de email e criacao de compromissos com previa/confirmacao concreta no
+  PC. A conta ainda precisa ser configurada pelo usuario: veja
+  [GOOGLE_SETUP.md](docs/GOOGLE_SETUP.md). Tokens ficam criptografados com DPAPI
+  e fora do Git. Nenhuma mensagem/evento real foi enviado/criado nos testes.
+- **Validacao conjunta:** veja [VALIDATION.md](docs/VALIDATION.md). Os testes
+  tecnicos usam dados temporarios/mocks para acoes externas; a validacao do
+  seu fluxo real e a etapa seguinte. Reabra o PC para carregar as ferramentas
+  novas e instale o APK Android 0.5.0 quando o celular estiver disponivel.
+
+- `document_workflow` acrescenta o fluxo encontrar/ler/comparar documentos
+  locais selecionados pelo usuario. Busca por nome e/ou conteudo em uma pasta
+  explicita, sem diferenciar maiusculas ou acentos. Le PDF, DOCX, TXT, MD e CSV
+  com referencias de pagina, paragrafo, tabela ou linha e hash SHA256; leituras
+  longas sao paginadas e podem conferir o hash para nao misturar revisoes.
+- `compare` preserva valores explicitamente escritos como R$ no formato
+  numerico brasileiro, com rotulo, trecho e arquivo de origem. Nao decide que
+  parcela, frete, preco unitario e total sejam ofertas equivalentes, nao inventa
+  valores ausentes e nao faz conversao de moedas. Exporta CSV ou XLSX.
+  `spreadsheet_control` tambem inspeciona e cria planilhas, ou aplica alteracoes
+  de celulas a uma nova copia XLSX, conferindo o hash da origem. Nao sobrescreve
+  os originais e nao recalcula formulas nem controla o Excel aberto.
+- Uma nova comparacao CSV e relida apos salvar, nunca sobrescreve arquivos e
+  permite desfazer enquanto o arquivo gerado nao tiver sido editado. Documentos
+  com erro/sem valores identificados impedem exportacao silenciosamente parcial.
+  Avisos de cobertura dos documentos lidos acompanham os valores no CSV.
+- Limites: 10 MB por documento, 100 paginas PDF, 200 mil caracteres extraidos,
+  busca de ate 200 documentos/500 pastas e prazo verificado entre arquivos,
+  comparacao de 2-10 documentos e ate 500 valores. Busca/leitura avisam quando
+  os resultados sao parciais. PDF sem texto selecionavel pode precisar de OCR;
+  `ocr=true` usa o OCR local do Windows em paginas sem texto entre as primeiras
+  dez paginas, com aviso de transcricao incerta. `document_ocr` permite ler
+  paginas selecionadas e imagens separadamente. DOCX cobre corpo e tabelas, nao imagens ou
+  caixas de texto. Nenhuma chamada extra a IA e feita na extracao; os trechos
+  retornados entram na conversa com o provedor configurado do assistente.
+- Exemplo: "Encontre os orcamentos nesta pasta, compare os valores e salve
+  uma tabela". Informe a pasta e, se houver arquivos ambiguos, quais comparar.
+
+- `routine_control` permite salvar, consultar e iniciar rotinas de 2-20
+  programas/paginas. A rotina personalizada "Comecar meu trabalho" foi
+  configurada a pedido do usuario com Discord, Visual Studio Code e Chrome,
+  nessa ordem, sem posicoes de janela ou paginas inventadas. Os dados pessoais
+  ficam em `memory/routines.db`, fora do Git.
+- `start` cria um plano; `next` executa exatamente uma etapa salva e registra
+  a confirmacao antes da proxima. A abertura de programas usa
+  `open_app wait_until_ready=true`; um processo sem janela confirmada nao
+  conclui a etapa. Erros ou resultados nao confirmados bloqueiam o plano.
+  Nao ha execucao ao salvar, abrir ou reconectar o Jarvis, nem agendamento.
+- O botao Interromper pausa uma rotina ativa. Uma acao ja enviada ao sistema
+  pode terminar; as seguintes ficam bloqueadas. Retome pedindo para continuar
+  a rotina. Edicoes posteriores da configuracao nao alteram um plano em curso.
+- Exemplos de voz: "Comecar meu trabalho", "Quais sao minhas rotinas?",
+  "Mostre a rotina Comecar meu trabalho" ou "Adicione uma pagina a minha
+  rotina" (informe a URL). Esta primeira versao executa abertura de programas
+  e paginas; nao acrescenta organizacao automatica de janelas.
+
+- `task_plan` adiciona um objetivo persistente e 2-20 etapas ordenadas para
+  tarefas complexas. Permite consultar, pausar, bloquear com motivo, retomar
+  e cancelar. Exemplo: "pesquise tres hoteis, compare e salve uma tabela";
+  depois, "o que falta?" ou "continue a tarefa anterior".
+- O registro fica em `memory/task_plans.db`, ignorado pelo Git. Atualizacoes
+  usam transacoes e revisoes para impedir que uma resposta atrasada sobrescreva
+  o progresso. A abertura/reconexao carrega um resumo para o assistente, sem
+  executar o plano automaticamente. Cancelar nao desfaz acoes ja realizadas.
+- Para concluir uma etapa, o assistente precisa de evidencia e de um recibo
+  de resultado estruturado `done` gerado por uma ferramenta suportada. O recibo
+  e vinculado ao plano e a etapa, expira em cinco minutos e nao pode ser usado
+  novamente. Pausa, bloqueio e retomada invalidam recibos ainda nao usados.
+  Texto de paginas/arquivos e retornos `failed`/`unverified` nao geram recibos.
+- `file_controller verify` rele um arquivo UTF-8 de ate 1 MB e compara com o
+  conteudo esperado, sem altera-lo, para conferir um artefato de texto salvo.
+  O assistente ainda precisa avaliar se a evidencia atende ao objetivo: um
+  recibo de navegacao nao comprova uma reserva. O plano e um registro de
+  progresso usado pelo modelo, nao um executor autonomo em segundo plano.
+
+- `browser_control controls` lista os controles DOM atuais, incluindo campos
+  de data, dias do calendario (com data ISO quando exposta pelo site), valores
+  e contexto do hotel. Os IDs podem ser usados por `click`, `type` e `hover`;
+  expiram em 45 segundos e sao invalidados apos uma tentativa de interacao.
+  Controles substituidos ou cujo conteudo/contexto mudou exigem nova leitura.
+- `hover` verifica um evento real de movimento sobre o controle no navegador;
+  ele nao move o cursor fisico do Windows. Para esse pedido existe
+  `computer_control screen_move`, com localizacao, checagem visual do alvo e
+  conferencia da posicao final do cursor. A visao compara a imagem completa
+  e o recorte, depois verifica se o alvo permaneceu estavel. Pode recusar um
+  alvo ilegivel ou ambiguo em vez de mover para um ponto sem confirmacao.
+- Validacao real no Google Travel: abertura de Fazer check-in, selecao de
+  19/12/2026 e 29/12/2026 pelo calendario, aplicacao e leitura das duas datas
+  resultantes. O teste usou uma sessao isolada, sem efetuar reservas.
+
+- `desktop_accessibility` inspeciona controles nomeados da janela ativa do
+  Windows e devolve identificadores para clicar. Cada identificador expira em
+  30 segundos e e consumido na tentativa; foco, identidade, nome e geometria
+  sao conferidos novamente antes do clique. Nao requer nova chave de API.
+- `expected_text` permite conferir uma etiqueta exata que surgiu depois do
+  clique na mesma janela. Etiquetas que ja estavam visiveis nao confirmam a
+  acao. Sem evidencia, o resultado continua `unverified`.
+- `browser_control verify` procura texto exato visivel pelo Playwright, sem
+  novo clique e sem chamada adicional ao modelo. Navegar confirma apenas a
+  navegacao; clicar em um botao nao confirma envio, compra ou salvamento.
+- As instrucoes do assistente orientam manter o objetivo e as etapas pendentes,
+  observar novamente apos erros e nao repetir acoes sem conferir seu resultado.
+  Isso melhora a recuperacao dentro da conversa; nao implementa uma fila de
+  tarefas persistente nem garante compatibilidade com todos os aplicativos.
+- Reabra o Jarvis do PC para carregar a nova ferramenta e as instrucoes.
+
+
+### Perfil compartilhado entre meus dispositivos
+
+Android e outros PCs da mesma pessoa podem compartilhar memória, tarefas pessoais e contexto recente usando o PC principal pela VPN privada. No desktop, abra **UM SÓ JARVIS — MEUS DISPOSITIVOS**. O Android mantém seu funcionamento independente e sincroniza quando o principal está disponível. Veja [configuração, limites e validação](docs/SHARED_JARVIS.md).
+
+
+### Canal direto protegido — Android 0.8.0
+
+Sincronização entre aparelhos pela internet com TLS e certificado por dispositivo, sem VPN instalada nem servidor intermediário. O primeiro pareamento é local, por convite temporário. Esta etapa compartilha memória, tarefas e contexto; controle remoto e áudio continuam na rede local/VPN. Acesso externo exige configuração do roteador e teste pela rede móvel. Veja [configuração e limites](docs/DIRECT_CONNECTION.md).

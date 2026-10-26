@@ -35,6 +35,8 @@
       if(response.status===401){_reconnectPanel();return;}
       if(!response.ok)throw Error('state');
       renderState(await response.json());
+      const tasks=await _authFetch('/api/tasks');
+      if(tasks.ok)renderTask(await tasks.json());
     }catch{renderState({...state,connected:false});}
     finally{polling=false;}
   }
@@ -47,12 +49,39 @@
       setTimeout(poll,200);
     }catch{toast('Não foi possível enviar o controle. Confira a conexão.');}
   }
+  let task=null;
+  function renderTask(data){
+    task=data.plan;
+    const states={active:'Em andamento',paused:'Pausada',blocked:'Bloqueada',completed:'Concluída',cancelled:'Cancelada'};
+    $('task-title').textContent=task?`${task.objective} — ${task.completed}/${task.total} (${states[task.state]||task.state})`:'Nenhuma tarefa registrada';
+    $('task-steps').textContent=task?task.steps.map(s=>`${s.state==='done'?'✓':'○'} ${s.title}`).join('\n')+'\n'+task.reason:'';
+  }
+  window.taskControl=async action=>{
+    if(!task){toast('Nenhuma tarefa registrada');return;}
+    try{
+      const response=await _authFetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,plan_id:task.id,revision:task.revision})});
+      const data=await response.json();
+      if(!response.ok)throw Error(data.error||'Controle recusado');
+      renderTask(data);
+    }catch(e){toast(e.message);}
+  };
   window.panelView=view=>{
     if(view==='actions'){ $('actions-sheet').hidden=false;$('close-actions').focus();return; }
     document.body.dataset.view=view;
     document.querySelectorAll('.nav-button').forEach(button=>button.classList.toggle('active',button.dataset.view===view));
   };
   window.closePanelActions=()=>{$('actions-sheet').hidden=true;};
+  window.downloadAndroidApp=async()=>{
+    try{
+      const response=await _authFetch('/api/android/apk');
+      if(!response.ok)throw Error('download');
+      const url=URL.createObjectURL(await response.blob());
+      const link=document.createElement('a');link.href=url;link.download='JARVIS-Android-debug.apk';
+      document.body.appendChild(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),60000);
+      toast('APK baixado. Abra o arquivo no Android para instalar.');
+    }catch{toast('APK indisponível. Confira a conexão e se o app foi compilado no PC.');}
+  };
   window.panelCommand=text=>{
     closePanelActions();$('inp').value=text;panelView('conversation');$('inp').focus();
   };
