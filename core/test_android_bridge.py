@@ -11,6 +11,49 @@ from dashboard.server import DashboardServer
 
 
 class AndroidBridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_presence_video_goes_only_to_selected_authorized_updated_phone(self):
+        import base64
+        bridge = AndroidBridge()
+        socket = Mock(send_json=AsyncMock(), close=AsyncMock())
+        await bridge.attach(socket, 'phone-one', 'Phone')
+        self.assertFalse(await bridge.deliver_presence_frame('phone-one', 'alert-test', b'jpeg', notice='notice'))
+        await bridge.attach(socket, 'phone-one', 'Phone', presence_video=True)
+        self.assertTrue(await bridge.deliver_presence_frame('phone-one', 'alert-test', b'jpeg', notice='notice'))
+        frame = socket.send_json.call_args.args[0]
+        self.assertEqual(frame['type'], 'presence_alert')
+        self.assertEqual(base64.b64decode(frame['image']), b'jpeg')
+        self.assertFalse(await bridge.deliver_presence_frame('other-phone', 'alert-test', b'jpeg'))
+        self.assertFalse(await bridge.deliver_presence_frame('phone-one', 'alert-test', bytes(700001)))
+
+    async def test_presence_stream_requires_updated_client_and_ack(self):
+        bridge = AndroidBridge()
+        socket = Mock(send_json=AsyncMock(), close=AsyncMock())
+        await bridge.attach(socket, 'phone-one', 'Phone')
+        self.assertFalse(await bridge.begin_speech('phone-one', 'presence-test'))
+        socket.send_json.assert_not_called()
+        await bridge.attach(socket, 'phone-one', 'Phone', presence_audio=True)
+        task = asyncio.create_task(bridge.begin_speech('phone-one', 'presence-test'))
+        await asyncio.sleep(.01)
+        self.assertEqual(socket.send_json.call_args.args[0]['type'], 'assistant_start')
+        bridge.reply('wrong-phone', {'id': 'presence-test', 'result': {'ok': True}})
+        self.assertFalse(task.done())
+        bridge.reply('phone-one', {'id': 'presence-test', 'result': {'ok': True}})
+        self.assertTrue(await task)
+        self.assertEqual(bridge.pending, {})
+
+    async def test_presence_stream_denied_and_transcript_only_does_not_request_tts(self):
+        bridge = AndroidBridge()
+        socket = Mock(send_json=AsyncMock(), close=AsyncMock())
+        await bridge.attach(socket, 'phone-one', 'Phone', presence_audio=True)
+        task = asyncio.create_task(bridge.begin_speech('phone-one', 'presence-test'))
+        await asyncio.sleep(.01)
+        bridge.reply('phone-one', {'id': 'presence-test', 'result': {'ok': False}})
+        self.assertFalse(await task)
+        await bridge.deliver_reply('phone-one', 'other-request', 'text', speak=False)
+        self.assertFalse(socket.send_json.call_args.args[0]['speak'])
+        await bridge.cancel_speech('phone-one', 'presence-test')
+        self.assertEqual(socket.send_json.call_args.args[0]['type'], 'assistant_cancel')
+
     async def test_desktop_pcm_is_forwarded_unchanged_to_requested_phone(self):
         import base64
         bridge = AndroidBridge()

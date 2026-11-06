@@ -29,6 +29,8 @@ class PhoneControlService : Service() {
     @Volatile private var stopped = false
     @Volatile private var connecting = false
     private val completed = LinkedHashMap<String, JSONObject>()
+    private val presenceReplies = PresenceReplyGate()
+    private lateinit var presenceAudio: PresencePhoneAudio
     private val heartbeat = object : Runnable {
         override fun run() {
             if (!stopped) { socket?.send("{\"type\":\"ping\"}"); handler.postDelayed(this, 30000) }
@@ -36,7 +38,8 @@ class PhoneControlService : Service() {
     }
     override fun onCreate() {
         super.onCreate(); pc = PcClient(this)
-        AppState.stopRemoteSpeech = { AppState.expectedPhoneReply = ""; GeminiVoice.stop() }
+        presenceAudio = PresencePhoneAudio(applicationContext)
+        AppState.stopRemoteSpeech = { AppState.expectedPhoneReply = ""; presenceReplies.clear(); presenceAudio.stop(); GeminiVoice.stop() }
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel("jarvis_link", "Ligação com o PC", NotificationManager.IMPORTANCE_LOW))
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
@@ -65,11 +68,35 @@ class PhoneControlService : Service() {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
                         var id = pc.store.get("device_id")
                         if (id.isEmpty()) { id = UUID.randomUUID().toString(); pc.store.put("device_id", id) }
-                        webSocket.send(JSONObject().put("type", "hello").put("device_id", id).put("name", "${Build.MANUFACTURER} ${Build.MODEL}").toString())
+                        webSocket.send(JSONObject().put("type", "hello").put("device_id", id).put("name", "${Build.MANUFACTURER} ${Build.MODEL}").put("presence_audio", true).put("presence_video", true).toString())
                     }
                     override fun onMessage(webSocket: WebSocket, text: String) {
                         try {
                             val message = JSONObject(text)
+                            val requestId = message.optString("request_id")
+                            if (message.optString("type") in listOf("presence_alert", "presence_frame")) {
+                                val first = message.optString("type") == "presence_alert"
+                                val encoded = message.optString("image")
+                                if (encoded.length <= 950000 && PresencePreviewState.receive(message.optString("alert_id"),
+                                        android.util.Base64.decode(encoded, android.util.Base64.NO_WRAP), first, message.optBoolean("final"))) {
+                                    if (first) {
+                                        AppState.message("JARVIS", PresencePreviewState.NOTICE)
+                                        handler.post { PresenceAlertActivity.notify(applicationContext) }
+                                        if (pc.store.get("speak", "true") == "true") presenceAudio.warning()
+                                    }
+                                }
+                            }
+                            if (message.optString("type") == "assistant_start") {
+                                val enabled = pc.store.get("speak", "true") == "true" &&
+                                    (pc.store.get("phone_reply_enabled") == "true" || pc.store.get("remote_enabled") == "true")
+                                val accepted = presenceReplies.start(requestId,
+                                    enabled, message.optLong("ttl_ms", 5000), android.os.SystemClock.elapsedRealtime())
+                                webSocket.send(JSONObject().put("type", "result").put("id", requestId)
+                                    .put("result", JSONObject().put("ok", accepted).put("error", if (!enabled) "phone_voice_disabled" else if (!accepted) "invalid_speech_request" else "")).toString())
+                            }
+                            if (message.optString("type") == "assistant_cancel" && presenceReplies.accepts(requestId, android.os.SystemClock.elapsedRealtime())) {
+                                presenceReplies.clear(); presenceAudio.stop()
+                            }
                             if (message.optString("type") in listOf("ready", "pong")) {
                                 message.optString("voice_name").takeIf { it.isNotBlank() }?.let { pc.store.put("voice_name", it) }
                                 message.optString("voice_model").takeIf { it.isNotBlank() }?.let { pc.store.put("voice_model", it) }
@@ -82,17 +109,27 @@ class PhoneControlService : Service() {
                             if (message.optString("type") == "assistant_reply") {
                                 val answer = message.optString("text")
                                 if (answer.isNotBlank()) AppState.message("JARVIS / PC", answer)
-                                if (message.optString("request_id") == AppState.expectedPhoneReply) {
+                                val routed = presenceReplies.accepts(requestId, android.os.SystemClock.elapsedRealtime())
+                                if (requestId == AppState.expectedPhoneReply || routed) {
                                     val finalReply = message.optBoolean("final_reply", true)
-                                    if (finalReply) AppState.expectedPhoneReply = ""
-                                    if (message.optBoolean("audio_streamed") && finalReply) GeminiVoice.finishPc(message.optString("request_id"))
+                                    if (finalReply && requestId == AppState.expectedPhoneReply) AppState.expectedPhoneReply = ""
+                                    if (finalReply && routed) presenceReplies.clear()
+                                    if (!message.optBoolean("speak", true)) { /* Transcript only: webcam selected another output. */ }
+                                    else if (message.optBoolean("audio_streamed") && finalReply && routed) presenceAudio.finish(requestId)
+                                    else if (message.optBoolean("audio_streamed") && finalReply) GeminiVoice.finishPc(requestId)
                                     else if (message.optBoolean("audio_streamed")) { /* audio continues after tool result */ }
+                                    else if (routed) presenceAudio.text(answer)
                                     else handler.post { GeminiVoice.speak(applicationContext, answer) }
                                 }
                             }
-                            if (message.optString("type") == "assistant_audio" && message.optString("request_id") == AppState.expectedPhoneReply && pc.store.get("speak", "true") == "true") {
+                            if (message.optString("type") == "assistant_audio" &&
+                                (requestId == AppState.expectedPhoneReply || presenceReplies.accepts(requestId, android.os.SystemClock.elapsedRealtime())) && pc.store.get("speak", "true") == "true") {
+                                val routed = presenceReplies.accepts(requestId, android.os.SystemClock.elapsedRealtime())
+                                presenceReplies.touch(android.os.SystemClock.elapsedRealtime())
                                 AppState.phoneReplyDeadline = System.currentTimeMillis() + 60000
-                                GeminiVoice.pcAudio(message.getString("request_id"), android.util.Base64.decode(message.getString("data"), android.util.Base64.NO_WRAP), message.optInt("rate", 24000))
+                                val pcm = android.util.Base64.decode(message.getString("data"), android.util.Base64.NO_WRAP)
+                                if (routed) presenceAudio.audio(requestId, pcm, message.optInt("rate", 24000))
+                                else GeminiVoice.pcAudio(requestId, pcm, message.optInt("rate", 24000))
                             }
                             if (message.optString("type") == "command") controls.execute {
                                 val id = message.optString("id")
@@ -138,6 +175,8 @@ class PhoneControlService : Service() {
     }
     override fun onDestroy() {
         stopped = true; handler.removeCallbacksAndMessages(null)
+        presenceReplies.clear(); GeminiVoice.stop()
+        presenceAudio.close(); PresencePreviewState.clear()
         AppState.pcReady = false
         pc.store.put("phone_reply_enabled", "false")
         AppState.stopRemoteSpeech = null

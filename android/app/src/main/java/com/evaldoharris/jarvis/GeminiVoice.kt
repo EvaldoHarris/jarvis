@@ -172,7 +172,7 @@ object GeminiVoice {
     }
 }
 
-private class PcmPlayback(private val rate: Int, private val done: () -> Unit) {
+internal class PcmPlayback(private val rate: Int, private val done: () -> Unit) {
     // Sem limite: o Gemini manda a fala mais rápido do que ela toca; uma fila cheia cortava respostas longas.
     private val queue = LinkedBlockingQueue<ByteArray>()
     @Volatile private var stopped = false
@@ -188,8 +188,7 @@ private class PcmPlayback(private val rate: Int, private val done: () -> Unit) {
     private fun play() {
         try {
             val minimum = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
-            val output = AudioTrack.Builder().setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()).setAudioFormat(AudioFormat.Builder().setSampleRate(rate)
+            val output = AudioTrack.Builder().setAudioAttributes(AssistantAudio.attributes()).setAudioFormat(AudioFormat.Builder().setSampleRate(rate)
                 .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
                 .setBufferSizeInBytes(maxOf(minimum, rate / 2)).setTransferMode(AudioTrack.MODE_STREAM).build()
             track = output; output.play()

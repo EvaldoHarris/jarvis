@@ -569,11 +569,25 @@ def code_helper(
     elif action == "explain":
         return _explain_action(file_path, code, player)
 
-    elif action == "run":
-        return _run_action(file_path, args, timeout, player)
-
-    elif action == "build":
-        return _build(description, language, output_path, args, timeout, speak, player)
+    elif action in ("run", "build"):
+        # Running code is not undoable, so a person confirms on the HUD first.
+        from core import confirm, outcome
+        if action == "run" and not Path(file_path or ".").is_file():
+            return f"File not found: {file_path}"
+        if confirm.pending_title():
+            return outcome.ask("code_helper", "there is already a confirmation waiting on screen - the user has to answer that one first")
+        if action == "run":
+            return confirm.request(
+                key="code-run", title=f"Executar {Path(file_path).name}",
+                detail=f"Arquivo: {file_path}\nArgumentos: {args or 'nenhum'}\n\n{_preview(Path(file_path).read_text(encoding='utf-8', errors='replace'), 15)}",
+                run=lambda: (lambda out: (speak(f"Finished running {Path(file_path).name}.") if speak else None, out)[1])(
+                    _run_action(file_path, args, timeout, player)),
+            )
+        return confirm.request(
+            key="code-build", title="Escrever e executar código novo",
+            detail=f"Pedido: {description}\nLinguagem: {language or 'python'}\n\nO código gerado será executado e corrigido automaticamente até funcionar.",
+            run=lambda: _build(description, language, output_path, args, timeout, speak, player),
+        )
 
     elif action == "optimize":
         return _optimize_action(file_path, code, language, output_path, player)

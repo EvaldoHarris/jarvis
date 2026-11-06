@@ -105,8 +105,15 @@ def save_voice(voice_name: str) -> None:
 
 
 def get_wake_word_enabled() -> bool:
-    """Whether local wake-word gating is on (assistant sleeps until 'Hey Jarvis')."""
-    return load_api_keys().get("wake_word_enabled", False)
+    """Whether the local Jarvis keyword + owner voice gate is enabled."""
+    return load_api_keys().get("wake_word_enabled", True)
+
+
+def save_voice_owner(name: str) -> None:
+    ensure_config_dir()
+    data = load_api_keys()
+    data["voice_owner"] = name.strip()
+    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
 
 
 def save_wake_word_enabled(enabled: bool) -> None:

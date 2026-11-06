@@ -22,6 +22,7 @@ internal class WakeSpotter(private val onWake: (String) -> Unit) {
         private const val MIN_CONFIDENCE = 0.55
         private val loader = Executors.newSingleThreadExecutor()
         @Volatile private var model: Model? = null
+        internal fun sharedModel():Model?=model
 
         /** Copia o modelo dos assets uma única vez e o carrega em memória (alguns segundos na primeira vez). */
         fun preload(context: Context) {

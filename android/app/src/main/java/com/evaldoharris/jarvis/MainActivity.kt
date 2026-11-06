@@ -50,6 +50,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        volumeControlStream=AssistantAudio.attributes().volumeControlStream
         store = SecureStore(this)
         DeviceSync.start(applicationContext)
         if (AppState.assistant == null) AppState.assistant = JarvisAssistant(applicationContext)
@@ -65,6 +66,9 @@ class MainActivity : Activity() {
         status = TextView(this).apply { textSize = 10f; letterSpacing = .12f; setTextColor(Ui.MUTED); typeface = Typeface.MONOSPACE }
         titleBox.addView(status)
         header.addView(titleBox, LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(Ui.iconButton(this, "⇄", "Tradução de vídeos com voz") {
+            startActivity(Intent(this, VideoTranslationActivity::class.java))
+        }, LinearLayout.LayoutParams(dp(44), dp(44)))
         header.addView(Ui.iconButton(this, "⚙", "Configurações") { settings() }, LinearLayout.LayoutParams(dp(44), dp(44)))
         root.addView(header, LinearLayout.LayoutParams(-1, dp(52)))
         // Rosto: sempre visível, fora da área que rola
@@ -100,16 +104,21 @@ class MainActivity : Activity() {
         TaskReminders.restore(this)
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 12)
+        else PhoneComms.PERMISSIONS.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+            .takeIf { it.isNotEmpty() && store.get("comms_asked") != "true" }
+            ?.let { store.put("comms_asked", "true"); requestPermissions(it.toTypedArray(), 13) }
     }
 
     override fun onResume() {
         super.onResume(); AppState.listeners.add(refresh); AppState.mainVisible = true; AppState.update(); renderState(); AppState.assistant?.warmLive()
         if (store.get("remote_enabled") == "true") startRemote()
         startHandsFree()
+        consumeListeningRequest()
     }
     override fun onPause() { AppState.listeners.remove(refresh); AppState.mainVisible = false; AppState.update(); super.onPause() }
     override fun onDestroy() { voiceActive = false; AppState.manualListening = false; voiceGeneration++; speech?.destroy(); main.removeCallbacksAndMessages(null); background.shutdownNow(); super.onDestroy() }
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); consumeImage(intent) }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); consumeImage(intent);consumeListeningRequest() }
+    private fun consumeListeningRequest(){if(intent.getBooleanExtra("activate_listening",false)){intent.removeExtra("activate_listening");main.post{listen()}}}
     private fun consumeImage(intent: Intent) {
         val path = intent.getStringExtra("screen_image") ?: return
         val file = File(path)
@@ -168,6 +177,7 @@ class MainActivity : Activity() {
             .setItems(arrayOf("Tirar foto com a câmera", "Ver a tela de outro aplicativo")) { _, i -> if (i == 0) camera() else observeScreen() }.show()
     }
     private fun stopAll() {
+        stopService(Intent(this, VideoTranslationService::class.java))
         AppState.assistant?.cancel(); stopVoice(); GeminiVoice.stop(); AppState.stopRemoteSpeech?.invoke()
         store.put("voice_mode", "off"); stopService(Intent(this, WakeListeningService::class.java)); AppState.phase = "PRONTO"; AppState.update()
     }
@@ -187,6 +197,7 @@ class MainActivity : Activity() {
         }
     }
     private fun startHandsFree() {
+        if (VideoTranslationState.active) return
         if (store.get("voice_mode", "wake") == "off" || checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return
         try { startForegroundService(Intent(this, WakeListeningService::class.java)) }
         catch (_: Exception) { AppState.message("SYS", "Android não permitiu iniciar a escuta. Abra o app e habilite o microfone.") }
@@ -196,11 +207,14 @@ class MainActivity : Activity() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 10); return }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) { AppState.message("SYS", "Instale ou habilite um serviço de reconhecimento de voz no Android."); return }
         if (voiceActive) { speech?.stopListening(); return }
+        WakeListeningService.current?.releaseForManual()
+        VideoTranslationState.pauseNarrationUntil=System.currentTimeMillis()+20000
         GeminiVoice.stop(); AppState.stopRemoteSpeech?.invoke(); voiceRetried = false; voiceRequest++
         AppState.manualListening = true
         main.postDelayed({ startRecognition() }, if (AppState.wakeRunning) 400 else 0)
     }
     private fun stopVoice() {
+        VideoTranslationState.pauseNarrationUntil=0
         voiceRequest++
         AppState.manualListening = false
         if (!voiceActive) return
@@ -222,6 +236,7 @@ class MainActivity : Activity() {
                     voiceActive = false
                     val phrase = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
                     AppState.manualListening = false
+                    VideoTranslationState.pauseNarrationUntil=0
                     input.setText(phrase); AppState.phase = "PRONTO"; AppState.update()
                     val request = voiceRequest
                     if (phrase.isNotEmpty()) main.post { if (voiceRequest == request) send() }
@@ -229,6 +244,7 @@ class MainActivity : Activity() {
                 override fun onError(error: Int) {
                     if (!current()) return
                     voiceActive = false
+                    VideoTranslationState.pauseNarrationUntil=0
                     android.util.Log.w("JarvisVoice", "recognition_error=$error")
                     if (error == 11) {
                         speech?.destroy(); speech = null; voiceGeneration++
@@ -275,7 +291,7 @@ class MainActivity : Activity() {
     private fun observeScreen() {
         if (JarvisAccessibilityService.current == null) { explainAccessibility(); return }
         AlertDialog.Builder(this).setTitle("Observar outro aplicativo")
-            .setMessage("Abra o aplicativo desejado e toque no pequeno reator flutuante na lateral. Ele captura a tela antes de abrir o JARVIS. Você escolhe o pedido e confirma o envio à IA.")
+            .setMessage("Abra o aplicativo desejado e segure o pequeno reator flutuante para capturar a tela antes de abrir o JARVIS. Um toque permite falar; dois toques abrem o app. Você confirma o envio da imagem tocando em ENVIAR.")
             .setPositiveButton("Entendi") { _, _ -> moveTaskToBack(true) }.show()
     }
     private fun camera() {

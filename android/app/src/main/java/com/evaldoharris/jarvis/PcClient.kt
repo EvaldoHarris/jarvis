@@ -29,11 +29,20 @@ class PcClient(private val context: Context) {
         val reply = post("/login", JSONObject().put("pin", pin))
         store.put("pc_device_token", reply.getString("device_token"))
         store.put("pc_token", reply.getString("token"))
+        rememberMacs(reply)
+    }
+    /** Guarda as placas de rede do PC para poder ligá-lo depois (Wake-on-LAN). */
+    private fun rememberMacs(reply: JSONObject) {
+        val macs = reply.optJSONArray("wol_macs") ?: return
+        val valid = (0 until macs.length()).map { macs.optString(it) }.filter { PcPower.validMac(it) }
+        if (valid.isNotEmpty()) store.put("pc_macs", valid.joinToString(","))
     }
     fun renew(): String {
         val device = store.get("pc_device_token")
         require(device.isNotEmpty()) { "Faça o pareamento com o PC." }
-        return post("/api/device-login", JSONObject().put("device_token", device)).getString("token").also { store.put("pc_token", it) }
+        val reply = post("/api/device-login", JSONObject().put("device_token", device))
+        rememberMacs(reply)
+        return reply.getString("token").also { store.put("pc_token", it) }
     }
     fun pairedPost(path: String, body: JSONObject = JSONObject()): JSONObject {
         var token = store.get("pc_token")

@@ -25,6 +25,13 @@ class CapabilityPromptTests(unittest.TestCase):
         self.assertNotIn("screen_click", rendered)
         self.assertNotIn("operate the mouse", rendered)
 
+    def test_railway_capability_overrides_old_refusal_only_when_tool_exists(self):
+        from actions.cloud_cli import TOOL
+        rendered = self.render([TOOL])
+        self.assertIn("action='projects'", rendered)
+        self.assertIn("previous statement", rendered)
+        self.assertNotIn("Railway", self.render([]))
+
 
 if __name__ == "__main__":
     unittest.main()

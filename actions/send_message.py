@@ -344,17 +344,29 @@ def send_message(
     if player:
         player.write_log(f"[msg] {platform} → {receiver}")   # the message itself IS the news
 
-    threading.Thread(
-        target=_send_and_report,
-        args=(player, platform, receiver, message_text),
-        daemon=True, name="send-message",
-    ).start()
+    # A sent message cannot be unsent, so a person presses CONFIRM on the HUD
+    # first; the model cannot do it for them. After that the send runs in the
+    # background and _send_and_report speaks the real result.
+    from core import confirm
+    if confirm.pending_title():
+        return outcome.ask("send_message",
+                           "there is already a confirmation waiting on screen - "
+                           "the user has to answer that one first", to=receiver)
 
-    # Sending opens an application, searches for a person and types — several
-    # seconds during which the old code held the whole conversation still. The
-    # answer goes out now and the result follows, which is the shape
-    # whatsapp_call.py settled on for the same reason.
-    return outcome.started("send_message", platform=platform, to=receiver)
+    def _start() -> str:
+        threading.Thread(
+            target=_send_and_report,
+            args=(player, platform, receiver, message_text),
+            daemon=True, name="send-message",
+        ).start()
+        return f"sending via {platform}"
+
+    return confirm.request(
+        key="send-message",
+        title=f"Enviar mensagem no {platform} para {receiver}",
+        detail=f"Para: {receiver}\nApp: {platform}\n\n{message_text}",
+        run=_start,
+    )
 
 
 def _send_and_report(player, platform: str, receiver: str,
@@ -413,9 +425,11 @@ TOOL = {
         "Sends a text message via WhatsApp, Telegram, or another messaging "
         "platform. Write 'message_text' in the USER'S OWN LANGUAGE, exactly "
         "what they asked to be said. "
-        "This tool answers immediately and sends in the background. On "
-        "status=started say only that you are sending it, never that it is "
-        "sent. The result follows separately: status=done means it was "
+        "Nothing is sent until the user presses CONFIRM on the HUD: on "
+        "[CONFIRMATION_PENDING] read back recipient and text in one short "
+        "sentence and ask them to confirm on screen; never say it is sent. "
+        "After confirmation it sends in the background and the result "
+        "follows separately:status=done means it was "
         "confirmed delivered to the conversation, status=unverified means the "
         "keystrokes went out and NOBODY can confirm it arrived - say exactly "
         "that - and status=failed means it did not go. Never tell the user a "

@@ -13,11 +13,13 @@ class AndroidBridge:
         self.devices = {}
         self.pending = {}
         self.loop = None
+        self.last_delivery_error = ''
 
-    async def attach(self, websocket, device_id, name, authorized=lambda: True):
+    async def attach(self, websocket, device_id, name, authorized=lambda: True, presence_audio=False, presence_video=False):
         self.loop = asyncio.get_running_loop()
         previous = self.devices.get(device_id)
-        self.devices[device_id] = {"socket": websocket, "name": name[:80], "connected_at": time.time(), "authorized": authorized}
+        self.devices[device_id] = {"socket": websocket, "name": name[:80], "connected_at": time.time(), "authorized": authorized,
+                                   "presence_audio": presence_audio is True, 'presence_video': presence_video is True}
         if previous:
             await previous["socket"].close(code=4000)
 
@@ -30,7 +32,10 @@ class AndroidBridge:
                 future.set_result({"ok": False, "error": "Android desconectado durante o comando."})
 
     def list_devices(self):
-        return [{"id": key, "name": value["name"], "connected": True} for key, value in list(self.devices.items()) if value["authorized"]()]
+        return [{"id": key, "name": value["name"], "connected": True,
+                 'presence_audio': value.get('presence_audio', False),
+                 'presence_video': value.get('presence_video', False)}
+                for key, value in list(self.devices.items()) if value["authorized"]()]
 
     def _resolve(self, device_id):
         """Aceita o ID exato, o nome do aparelho ou nenhum valor quando só há um Android online."""
@@ -86,13 +91,60 @@ class AndroidBridge:
         except Exception:
             return False
 
-    async def deliver_reply(self, device_id, request_id, text, audio_streamed=False, final_reply=True):
+    async def begin_speech(self, device_id, request_id):
+        device = self.devices.get(device_id)
+        if not device or not device['authorized']() or not device.get('presence_audio'):
+            self.last_delivery_error = 'phone_offline' if not device else 'phone_app_needs_update'
+            return False
+        future = asyncio.get_running_loop().create_future()
+        self.pending[(device_id, request_id)] = future
+        try:
+            await asyncio.wait_for(device['socket'].send_json({'type': 'assistant_start',
+                'request_id': request_id, 'ttl_ms': 5000, 'expires_at': time.time() + 5}), 1)
+            result = await asyncio.wait_for(future, 5)
+            self.last_delivery_error = '' if result.get('ok') is True else str(result.get('error') or 'phone_refused_audio')
+            return not self.last_delivery_error
+        except Exception as exc:
+            self.last_delivery_error = 'phone_ack_' + type(exc).__name__
+            return False
+        finally:
+            self.pending.pop((device_id, request_id), None)
+
+    async def deliver_presence_frame(self, device_id, alert_id, image, notice='', final=False):
+        device = self.devices.get(device_id)
+        if not device or not device['authorized']() or not device.get('presence_video'):
+            self.last_delivery_error = 'phone_video_needs_update_or_offline'
+            return False
+        if len(image) > 700_000:
+            return False
+        try:
+            await asyncio.wait_for(device['socket'].send_json({'type': 'presence_alert' if notice else 'presence_frame',
+                'alert_id': alert_id, 'image': base64.b64encode(image).decode('ascii'),
+                'notice': notice, 'final': final}), 1)
+            return True
+        except Exception:
+            self.last_delivery_error = 'presence_video_send_failed'
+            return False
+
+    async def cancel_speech(self, device_id, request_id):
+        device = self.devices.get(device_id)
+        if not device or not device['authorized']():
+            return False
+        try:
+            await asyncio.wait_for(device['socket'].send_json({'type': 'assistant_cancel',
+                                                              'request_id': request_id}), .5)
+            return True
+        except Exception:
+            return False
+
+    async def deliver_reply(self, device_id, request_id, text, audio_streamed=False, final_reply=True, speak=True):
         device = self.devices.get(device_id)
         if not device or not device["authorized"]():
             return False
         try:
-            await device["socket"].send_json({"type": "assistant_reply", "request_id": request_id,
-                                            "text": text, "audio_streamed": bool(audio_streamed), "final_reply": bool(final_reply)})
+            await asyncio.wait_for(device["socket"].send_json({"type": "assistant_reply", "request_id": request_id,
+                                            "text": text, "audio_streamed": bool(audio_streamed), "final_reply": bool(final_reply),
+                                            "speak": bool(speak)}), 1)
             return True
         except Exception:
             return False

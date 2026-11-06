@@ -969,22 +969,39 @@ class _BrowserSession:
         except Exception as exc:
             return outcome.failed('browser_hover', str(exc), recovery='controls')
 
+    async def _gated_click(self, page, locator, label):
+        """Click, unless the control commits money, deletes or publishes:
+        then a person has to press CONFIRM on the HUD first."""
+        risky = await _risky_control(locator)
+        if not risky:
+            return await self._click_and_inspect(page, locator, label)
+        from core import confirm
+        if confirm.pending_title():
+            return outcome.ask("browser_control", "there is already a confirmation waiting on screen - the user has to answer that one first", target=risky)
+        host = urlsplit(page.url).hostname or page.url
+        return confirm.request(
+            key="browser-click",
+            title=f"Clicar em \"{risky[:60]}\" em {host}",
+            detail=f"Site: {page.url}\nBotão: {risky}\n\nEste clique pode comprar, pagar, excluir ou publicar algo.",
+            run=lambda: str(self.run(self._click_and_inspect(page, locator, label)))[:300],
+        )
+
     async def click(self, selector: str = None, text: str = None, element_id=None) -> str:
         page = await self._get_page()
         try:
             if element_id:
                 locator = await self._observed_control(page, element_id)
-                return await self._click_and_inspect(page, locator, element_id)
+                return await self._gated_click(page, locator, element_id)
             if text:
                 locator = await self._named_click_target(page, text)
                 if locator is None:
                     return outcome.failed("browser_control", "Nenhum link ou botão único corresponde ao nome. Use links para obter os nomes reais.", target=text)
-                return await self._click_and_inspect(page, locator, text)
+                return await self._gated_click(page, locator, text)
             if selector:
                 locator = page.locator(selector)
                 if await locator.count() != 1 or not await locator.is_visible():
                     return outcome.failed("browser_control", "O seletor não identifica um único elemento visível.")
-                return await self._click_and_inspect(page, locator, selector)
+                return await self._gated_click(page, locator, selector)
             return outcome.failed("browser_control",
                                   "no element was named to click")
         except PlaywrightTimeout as exc:
@@ -1029,6 +1046,21 @@ class _BrowserSession:
     async def press(self, key: str) -> str:
         page = await self._get_page()
         try:
+            # Enter inside a checkout form submits it just like the button.
+            if key.lower() in ("enter", "numpadenter"):
+                focused = page.locator(":focus")
+                if await focused.count() == 1:
+                    risky = await _risky_control(focused, form_submit=True)
+                    if risky:
+                        from core import confirm
+                        if confirm.pending_title():
+                            return outcome.ask("browser_control", "there is already a confirmation waiting on screen", target=risky)
+                        return confirm.request(
+                            key="browser-enter",
+                            title=f"Enviar formulário \"{risky[:60]}\"",
+                            detail=f"Site: {page.url}\nAção: {risky}\n\nApertar Enter aqui pode comprar, pagar, excluir ou publicar algo.",
+                            run=lambda: str(self.run(page.keyboard.press(key)) or "Enter pressed."),
+                        )
             await page.keyboard.press(key)
             return f"Pressed: {key}"
         except Exception as e:
@@ -1422,6 +1454,37 @@ def browser_control(
 
     _log(player, result)
     return result
+
+
+# Words on a button that mean "this cannot be taken back": paying, ordering,
+# deleting, publishing. Matched on whole words after removing accents.
+_RISKY_WORDS = re.compile(
+    r"\b(comprar|compre|finalizar (a )?compra|finalizar pedido|fechar pedido|concluir (compra|pedido)|"
+    r"confirmar (compra|pedido|pagamento|pix|transferencia)|pagar|pague|pagamento|pix|transferir|"
+    r"assinar|contratar|doar|excluir|apagar|deletar|publicar|postar|"
+    r"buy|purchase|checkout|check out|place (your )?order|pay|payment|subscribe|donate|"
+    r"transfer|delete|publish|post)\b", re.I)
+
+_CONTROL_TEXT_JS = """(e, formSubmit) => {
+  const text = el => [el.innerText, el.value, el.getAttribute('aria-label'), el.title, el.alt]
+      .filter(Boolean).join(' ').trim();
+  if (!formSubmit) return text(e).slice(0, 200);
+  const form = e.form || e.closest('form');
+  if (!form) return '';
+  const submits = form.querySelectorAll('button:not([type=button]):not([type=reset]), input[type=submit]');
+  return Array.from(submits).map(text).join(' | ').slice(0, 200);
+}"""
+
+
+async def _risky_control(locator, form_submit: bool = False) -> str:
+    """The control's visible text when it looks irreversible, else ''."""
+    import unicodedata
+    try:
+        label = await locator.evaluate(_CONTROL_TEXT_JS, form_submit)
+    except Exception:
+        return ""
+    plain = unicodedata.normalize("NFKD", label or "").encode("ascii", "ignore").decode()
+    return (label or "").strip() if _RISKY_WORDS.search(plain) else ""
 
 
 def _log(player, text: str):

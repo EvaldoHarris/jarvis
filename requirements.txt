@@ -12,6 +12,7 @@
 # package, no OpenGL and no GPU. Nothing below was added for it.
 PyQt6>=6.6,<7
 sounddevice>=0.4,<1
+# Offline video captions: see requirements-translation.txt and setup_translation.py.
 numpy>=1.24,<3
 google-genai>=2.8.0,<3
 # Declared even though google-genai already installs it. providers/ imports it
@@ -133,11 +134,20 @@ pynvml                       # system_monitor + the HUD's GPU meter (NVIDIA)
 # only ever uses Gemini should not pay for them. Deleting providers/ removes
 # the whole feature and the app runs exactly as it did before it existed.
 
-# ── Optional: local wake word ("Hey Jarvis") ──────────────────────────────────
-# Deliberately NOT installed by default — it's opt-in. Enable it (and download
-# the tiny model) with one click from ⚙ → WAKE WORD in the app, or install it
-# yourself with:  pip install openwakeword
+# ── Continuous listening: "Jarvis" + enrolled owner's voice ───────────────────
+# pip install faster-whisper sherpa-onnx
+# python setup_identity.py --voice
+# Enabled by default; stays silent if models or owner enrollment are missing.
 #
 # macOS / Linux OS actions (volume, brightness, reminders) shell out to native
 # tools (pactl / brightnessctl / osascript / systemd), so no extra Python
 # packages are needed there — nothing Windows-specific is ever pulled in.
+
+# ── Discord message alerts (Windows) ──────────────────────────────────────────
+# Reads the Discord desktop app's Windows notifications to announce new messages.
+winrt-runtime>=3,<4; sys_platform == "win32"
+winrt-Windows.Foundation>=3,<4; sys_platform == "win32"
+winrt-Windows.Foundation.Collections>=3,<4; sys_platform == "win32"
+winrt-Windows.ApplicationModel>=3,<4; sys_platform == "win32"
+winrt-Windows.UI.Notifications>=3,<4; sys_platform == "win32"
+winrt-Windows.UI.Notifications.Management>=3,<4; sys_platform == "win32"

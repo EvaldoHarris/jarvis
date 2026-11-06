@@ -518,6 +518,26 @@ def _build_project(
         if speak: speak(msg)
         return msg
 
+    # Writing files is harmless; installing packages the model picked and
+    # running code it wrote is not. A person confirms on the HUD first.
+    from core import confirm, outcome
+    if confirm.pending_title():
+        return outcome.ask("dev_agent", "there is already a confirmation waiting on screen - the user has to answer that one first",
+                           project=str(project_dir))
+    deps_text = ", ".join(dependencies) if dependencies else "nenhum"
+    log(f"Files written to {project_dir}. Waiting for confirmation to install and run.")
+    return confirm.request(
+        key="dev-agent-run",
+        title=f"Instalar e executar o projeto {proj_name}",
+        detail=(f"Pasta: {project_dir}\nComando: {run_command}\nPacotes pip: {deps_text}\n\n"
+                f"Se faltar algum pacote durante a execução, ele também será instalado."),
+        run=lambda: _install_and_run(proj_name, project_dir, dependencies, run_command, files,
+                                     file_codes, description, language, entry_point, timeout, speak, log),
+    )
+
+
+def _install_and_run(proj_name, project_dir, dependencies, run_command, files,
+                     file_codes, description, language, entry_point, timeout, speak, log) -> str:
     if dependencies:
         install_result = _install_dependencies(dependencies, project_dir)
         log(install_result)

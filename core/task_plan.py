@@ -148,6 +148,7 @@ def attach_receipt(tool, result, parameters=None):
         'window_layout': {'place'},
         'spreadsheet_control': {'inspect', 'create', 'update'},
         'google_workspace': {'list_events','list_emails','read_email'},
+        'email_accounts': {'status','list_emails','read_email'},
     }
     action = (parameters or {}).get('action', '').lower().strip()
     if tool != 'open_app' and action not in verified_actions.get(tool, set()):

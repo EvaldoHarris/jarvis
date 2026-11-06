@@ -27,7 +27,11 @@ class JarvisAssistant(private val context: Context, private val endpoint: String
         AppState.phase = "PENSANDO"; AppState.update()
         worker.execute {
             try {
-                if (targetPc) {
+                val localTranslation = if (image==null && !Regex("\\b(pc|computador)\\b",RegexOption.IGNORE_CASE).containsMatchIn(text)) TranslationPolicy.command(text) else null
+                if(localTranslation!=null) {
+                    val result=FeatureTools.videoTranslation(context,localTranslation)
+                    AppState.message("JARVIS",result.optString("message",result.toString()))
+                } else if (targetPc) {
                     require(image == null) { "Envio de imagem ao PC ainda não está disponível; analise no Android." }
                     PcClient(context).command(text)
                     AppState.message("JARVIS", "Pedido enviado ao PC. O resultado aparece aqui quando ele responder.")
@@ -151,7 +155,7 @@ class JarvisAssistant(private val context: Context, private val endpoint: String
         }
         "browser" -> MobileBrowser.execute(context, args.optString("action"), args)
         "pc_command" -> PcClient(context).command(args.optString("text"))
-        "memory", "tasks", "files", "camera", "lights" -> FeatureTools.execute(context, name, args)
+        "memory", "tasks", "files", "camera", "lights", "comms", "pc_power", "video_translation" ->FeatureTools.execute(context, name, args)
         else -> PhoneTools.result(false, "Ferramenta desconhecida.")
     }
 

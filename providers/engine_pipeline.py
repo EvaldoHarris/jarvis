@@ -811,8 +811,8 @@ class _ReasoningFilter:
         to be sure it is not the beginning of a tag.
     """
 
-    _OPEN = ("<think>", "<thinking>", "<reasoning>")
-    _CLOSE = ("</think>", "</thinking>", "</reasoning>")
+    _OPEN = ("<think>", "<thinking>", "<reasoning>", "thought\n", "thought\r\n")
+    _CLOSE = ("</think>", "</thinking>", "</reasoning>", "text\n", "text\r\n")
     _HOLD = max(len(t) for t in _OPEN + _CLOSE)
 
     def __init__(self) -> None:
@@ -823,6 +823,7 @@ class _ReasoningFilter:
     def feed(self, chunk: str) -> str:
         """Whatever of `chunk` is safe to say out loud."""
         self._buf += chunk
+        self._buf = re.sub(r"<ctrl\d+>", "", self._buf)
         out = []
         while True:
             if self._inside:

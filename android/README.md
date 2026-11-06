@@ -5,6 +5,112 @@ Android Studio pela pasta `android`. O aplicativo conversa com o Gemini pelo
 próprio celular e não precisa do PC para suas funções locais. Requer internet e
 uma chave de API com acesso/cota para o modelo configurado.
 
+### Presença no PC e aviso com webcam (0.9.6)
+
+Instale o APK atualizado e mantenha a conexão **Respostas no celular** ou
+**Controle entre aparelhos** ativa, com voz e notificações permitidas.
+O PC pode encaminhar suas respostas para este app quando a webcam não confirmar
+o proprietário. O áudio PCM do PC dispensa chave Gemini no celular; respostas
+somente em texto e o aviso de pessoa não identificada usam a voz neural local.
+
+Com os avisos ativados no PC, uma pessoa visível sem confirmação do proprietário
+gera a frase solicitada “Evaldo, tem uma pessoa não identificada mexendo no seu
+computador” e uma prévia atualizada da webcam por 20 segundos. Com o Jarvis aberto,
+a prévia aparece automaticamente; em segundo plano, toque na notificação com
+imagem. A tela esclarece que o aviso pode ser uma falha de reconhecimento.
+Os quadros ficam temporariamente em memória; o app não grava um vídeo.
+O recurso não é uma comprovação de intrusão e não substitui a conferência da imagem.
+
+### Tradução de vídeos com voz (0.9.5)
+
+Na tela principal, toque em **⇄** (Tradução de vídeos com voz), ao lado de ⚙.
+Este recurso é independente do PC e não usa Gemini:
+
+1. Toque em **PREPARAR MODELOS OFFLINE**, com internet. Baixa o reconhecimento
+   Vosk de inglês (cerca de 40 MB) e os modelos de tradução ML Kit.
+2. Deixe **Ouvir tradução ao vivo** marcado e toque em **INICIAR TRADUÇÃO**.
+   Autorize a captura na tela do Android. A permissão de áudio é necessária
+   para a API de captura. O vídeo não gera imagens nem gravação; um microfone
+   separado fica ativo para reconhecer localmente **“Jarvis, pare a tradução”**.
+3. Abra um vídeo em inglês em outro aplicativo. A tradução para português é
+   falada localmente e a última legenda aparece na tela do recurso e na notificação.
+4. Use **Parar tradução** na notificação ou no app. O botão geral PARAR do Jarvis
+   também encerra a captura e cancela a voz. Desmarcar a voz mantém as legendas.
+
+O reconhecimento usa Vosk, a tradução usa ML Kit no dispositivo e a narração usa
+a voz neural masculina brasileira Piper Faber, executada localmente pelo Sherpa
+ONNX. O modelo de voz vem no APK; não depende do leitor de texto do aparelho nem
+do Gemini. É uma voz diferente da Charon, não uma clonagem. Use **OUVIR NOVA VOZ**
+para testar o timbre. O áudio de narração é sintetizado em arquivo temporário no
+cache privado e apagado após reprodução/cancelamento; o áudio do vídeo não é salvo.
+
+Esta primeira etapa suporta **inglês → português**. Os comandos locais
+**“Traduza o vídeo que estou assistindo”**, **“Parar tradução”**, **“Somente legendas”**
+e **“Status da tradução”** funcionam sem pedir ao Gemini.
+
+Com **Dizer Jarvis** ativo (ou usando FALAR), diga **“Jarvis, ative a tradução”**
+ou **“Jarvis, ligue o tradutor”**. O comando local abre diretamente a autorização
+do Android, sem exigir o toque adicional em INICIAR. Isso funciona também quando
+o seletor geral está em Computador pareado; pedidos que mencionam explicitamente
+PC/computador não são interceptados como tradução do celular. Se o Android bloquear
+a abertura em segundo plano, toque na notificação **Autorizar tradução com voz**.
+O consentimento do Android continua necessário em cada sessão e nunca é contornado.
+
+O áudio da tradução usa a mesma categoria **assistente de IA** das respostas do
+Jarvis (`USAGE_ASSISTANT`), com ganho normalizado e limitado
+para reforçar falas baixas sem saturar. A barra **Volume da tradução** ajusta
+somente essa voz, de 0 a 100%, e é lembrada. Na tela da tradução, os botões físicos
+ajustam o canal do assistente. A separação desse canal no painel depende da versão
+e da política de áudio do aparelho; não alteramos automaticamente o volume do vídeo.
+
+Durante a tradução, o microfone usa Vosk local com vocabulário restrito para
+**“Jarvis, pare a tradução”** / **“Jarvis, desative a tradução”**. Esse áudio de
+controle não vai ao reconhecedor de nuvem nem ao Gemini. O cancelamento de eco é
+ativado quando disponível, exige-se nome de ativação e confiança mínima, e a fala
+traduzida lendo a própria instrução é ignorada. Ruído, distância e fones podem
+afetar o reconhecimento; o botão Parar continua disponível.
+
+**Um toque no reator flutuante** abre uma janela de escuta sem exigir dizer Jarvis;
+um sinal e o estado verde indicam quando falar. **Dois toques** abrem o aplicativo,
+sem disparar o toque único. **Segurar** mantém a captura para analisar a tela e
+**arrastar** mantém o reposicionamento. O toque pode iniciar uma escuta pontual mesmo
+quando Dizer Jarvis está desligado, sem alterar essa preferência. Durante a janela
+manual, a narração pausa para permitir o pedido. Essa conversa manual usa o
+reconhecimento Android já configurado, que pode depender da rede.
+A captura exclui o UID do Jarvis e só inclui áudio de mídia/jogos; a narração é
+reproduzida pelo próprio app com captura desabilitada, evitando o ciclo de tradução.
+
+O Android exige consentimento em cada sessão. Apps ou conteúdos protegidos podem
+bloquear a captura, e não há contorno desse bloqueio. Sem áudio capturável, o app
+exibe uma orientação após alguns segundos. O reconhecimento preserva o contexto
+até uma pausa da fala (detecção de aproximadamente 450 ms, limite nativo de 8 s
+para fala contínua). Tradução e narração
+mantêm os trechos em ordem, sem substituir frases pendentes nem descartar por idade.
+A voz pode ficar atrasada em vídeos rápidos; se a fila atingir o limite de segurança,
+o app informa a sobrecarga em vez de pular frases silenciosamente. Interrupções do
+assistente pausam e retomam a narração. A próxima voz é sintetizada durante a
+reprodução atual, com até duas falas prontas; não se soma o tempo de síntese entre
+frases. Havendo fila, a reprodução acelera gradualmente até 1,45×, preservando o
+tom e todas as palavras. Isso reduz o acúmulo, mas não garante sincronia em vídeos
+com fala muito rápida. Não há sincronização labial nem sobreposição de legendas em outros
+apps; consulte a legenda pela notificação ou pela tela do recurso.
+
+Validação da etapa inicial: testes unitários e lint sem erros; no aparelho conectado,
+testes verificaram reconhecimento de fala sintética, tradução, síntese e
+reprodução com voz offline e abertura da tela sem iniciar captura automaticamente.
+A captura de aplicativos reais depende da autorização e da política do aplicativo
+de origem, e não foi incluída nesses testes.
+
+Referências: [captura de áudio Android](https://developer.android.com/media/platform/av-capture),
+[tradução local ML Kit](https://developers.google.com/ml-kit/language/translation/android),
+[modelos Vosk](https://alphacephei.com/vosk/models).
+
+A compilação baixa a biblioteca Sherpa ONNX 1.12.40 do release oficial e o modelo
+`vits-piper-pt_BR-faber-medium-int8`. O modelo é verificado por SHA-256, fica no cache
+Gradle e é empacotado como asset gerado; esses binários não entram no Git. O
+`MODEL_CARD` original acompanha o modelo no APK. Fonte:
+[Sherpa ONNX](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.12.40).
+
 ## Instalar e configurar
 
 1. Instale o APK `JARVIS-Android-debug.apk` no celular. É uma compilação de teste,
@@ -73,8 +179,9 @@ O reator fica fixo acima da área rolável da conversa, inclusive ao consultar o
 - **CÂMERA** abre a câmera do Android; depois de tirar uma foto, digite a pergunta
   e toque em **ENVIAR**. Nesta versão a análise é por foto, não vídeo contínuo.
 - **VER TELA** explica como usar o reator flutuante. Abra o aplicativo desejado e
-  toque nesse reator: ele captura a tela antes de abrir o JARVIS. Você confirma o
-  envio da imagem tocando em **ENVIAR**. Segurar o reator abre o assistente.
+  segure o reator: ele captura a tela antes de abrir o JARVIS. Você confirma o
+  envio da imagem tocando em **ENVIAR**. Um toque permite falar sem palavra de
+  ativação; dois toques abrem o aplicativo.
 - O assistente pode observar a tela/textos acessíveis, abrir aplicativos, tocar,
   rolar, preencher o campo selecionado e usar Voltar/Início para cumprir pedidos.
   Também pode listar aplicativos, abrir Recentes/Notificações e manter um toque

@@ -493,6 +493,32 @@ def _ensure_network_access(*ports: int) -> None:
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+_VIRTUAL_NIC = re.compile(r"(?i)vethernet|virtual|vmware|hyper-v|loopback|bluetooth|tailscale|zerotier|wsl|docker|vpn|tap|tun")
+_wake_mac_cache: list[str] | None = None
+
+
+def _wake_macs() -> list[str]:
+    """MACs of this PC's physical network cards, so a paired phone can send
+    a Wake-on-LAN packet later. Virtual adapters are left out."""
+    global _wake_mac_cache
+    if _wake_mac_cache is None:
+        macs: list[str] = []
+        try:
+            import psutil
+            for name, addrs in psutil.net_if_addrs().items():
+                if _VIRTUAL_NIC.search(name):
+                    continue
+                for a in addrs:
+                    mac = (a.address or "").replace("-", ":").upper()
+                    if a.family == psutil.AF_LINK and re.fullmatch(r"([0-9A-F]{2}:){5}[0-9A-F]{2}", mac) \
+                            and mac != "00:00:00:00:00:00" and mac not in macs:
+                        macs.append(mac)
+        except Exception:
+            pass
+        _wake_mac_cache = macs[:4]
+    return _wake_mac_cache
+
+
 def _local_ip() -> str:
     """Return the best LAN-facing IPv4 address, no internet required."""
     # Method 1: route trick (fast, works when internet is available)
@@ -1038,7 +1064,8 @@ class DashboardServer:
                 ))
                 # Bearer token in response body — no cookies needed (works on any browser/HTTP)
                 dev_tok = self._remember_device(entered)
-                return JSONResponse({"ok": True, "token": tok, "device_token": dev_tok})
+                return JSONResponse({"ok": True, "token": tok, "device_token": dev_tok,
+                                 "wol_macs": _wake_macs()})
             self._throttle.record_failure(who)
             return JSONResponse({"ok": False, "error": "Invalid or expired key"},
                                 status_code=401)
@@ -1112,7 +1139,8 @@ class DashboardServer:
             asyncio.create_task(self.broadcast(
                 {"type": "sys", "text": "Known device reconnected automatically."}
             ))
-            return JSONResponse({"ok": True, "token": tok, "key": session_key})
+            return JSONResponse({"ok": True, "token": tok, "key": session_key,
+                                 "wol_macs": _wake_macs()})
 
         @app.post("/api/revoke-devices")
         async def revoke_devices(req: Request):
@@ -1338,7 +1366,9 @@ class DashboardServer:
                 if hello.get("type") != "hello" or not re.fullmatch(r"[a-zA-Z0-9_-]{8,80}", device_id):
                     await websocket.close(code=4002)
                     return
-                await self.android_bridge.attach(websocket, device_id, str(hello.get("name") or "Android"), lambda: _valid(token))
+                await self.android_bridge.attach(websocket, device_id, str(hello.get("name") or "Android"), lambda: _valid(token),
+                                                 presence_audio=hello.get('presence_audio') is True,
+                                                 presence_video=hello.get('presence_video') is True)
                 from memory.config_manager import get_voice
                 from core.gemini import live_model
                 await websocket.send_json({"type": "ready", "device_id": device_id,

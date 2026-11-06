@@ -85,7 +85,7 @@ def _read_full_config() -> dict:
 APP_VERSION  = "MARK LVI"
 APP_PROTOCOL = APP_VERSION.split()[-1]
 
-_DEFAULT_W, _DEFAULT_H = 980, 700
+_DEFAULT_W, _DEFAULT_H = 1180, 760
 _MIN_W,     _MIN_H     = 820, 580
 _LEFT_W  = 148
 _RIGHT_W = 340
@@ -99,13 +99,13 @@ FONT_MONO = {"Windows": "Cascadia Mono", "Darwin": "Menlo"}.get(_OS, "DejaVu San
 
 
 class C:
-    BG        = "#02050b"
-    PANEL     = "#060e1a"
-    PANEL2    = "#081424"
-    BORDER    = "#123049"
-    BORDER_B  = "#1d6f94"
-    BORDER_A  = "#164766"
-    PRI       = "#00e5ff"
+    BG        = "#030810"
+    PANEL     = "#081321"
+    PANEL2    = "#0b1c2c"
+    BORDER    = "#183449"
+    BORDER_B  = "#31829a"
+    BORDER_A  = "#235267"
+    PRI       = "#63f4ff"
     PRI_DIM   = "#0a8fb0"
     PRI_GHO   = "#03223a"
     ACC       = "#ff7a1a"
@@ -114,9 +114,9 @@ class C:
     GREEN_D   = "#00b86b"
     RED       = "#ff3d6e"
     MUTED_C   = "#ff3d7f"
-    TEXT      = "#b6f6ff"
-    TEXT_DIM  = "#4a8ea3"
-    TEXT_MED  = "#74c6db"
+    TEXT      = "#cde8ef"
+    TEXT_DIM  = "#7797ac"
+    TEXT_MED  = "#98c2d1"
     WHITE     = "#e6fbff"
     DARK      = "#040a14"
     BAR_BG    = "#0a1a2a"
@@ -828,6 +828,21 @@ class HudCanvas(QWidget):
         p.setPen(QPen(blend(acc, 0.30 + 0.45 * amp), 1.5))
         p.drawEllipse(QRectF(cx - inner, cy - inner, inner * 2, inner * 2))
 
+        # Nested polygonal cage and orbiting indicators around the voice core.
+        for radius, phase, strength in ((0.49, t * 3, 0.35), (0.58, -t * 2, 0.16)):
+            points = [QPointF(cx + math.cos(math.radians(i * 60 + phase)) * r * radius,
+                             cy + math.sin(math.radians(i * 60 + phase)) * r * radius)
+                      for i in range(6)]
+            p.setPen(QPen(blend(main, strength), 1))
+            p.drawLines([QLineF(points[i], points[(i + 1) % 6]) for i in range(6)])
+        for i in range(3):
+            angle = math.radians(t * 7 + i * 120)
+            x, y = cx + math.cos(angle) * r * 0.845, cy + math.sin(angle) * r * 0.845
+            p.setPen(QPen(blend(acc, 0.2), 1))
+            p.setBrush(blend(acc, 0.85))
+            p.drawEllipse(QRectF(x - 2.5, y - 2.5, 5, 5))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
         # 9. The name, sized from the string rather than from the radius alone:
         #    "J.A.R.V.I.S" and a name someone renamed to "MAX" are very
         #    different widths, and a fixed fraction of r spills one of them past
@@ -843,6 +858,37 @@ class HudCanvas(QWidget):
             p.setPen(QPen(blend(qcol(C.WHITE), 0.6 + 0.4 * min(1.0, amp * 2)), 1))
             p.drawText(QRectF(cx - r, cy - fsz, r * 2, fsz * 2),
                        Qt.AlignmentFlag.AlignCenter, name)
+
+    def _paint_hud_frame(self, p, W, H):
+        """Instrument frame; all labels describe real UI state, never fake metrics."""
+        p.save()
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(qcol(C.BORDER, 120), 1))
+        # A perspective deck gives the reactor depth without another animation timer.
+        horizon = H * 0.72
+        for i in range(-5, 6):
+            p.drawLine(QLineF(W / 2 + i * W * 0.025, horizon,
+                              W / 2 + i * W * 0.21, H))
+        for fraction in (0.0, 0.08, 0.22, 0.43, 0.71, 1.0):
+            y = horizon + (H - horizon) * fraction
+            p.drawLine(QLineF(0, y, W, y))
+
+        # Cut-corner instrument rails.
+        p.setPen(QPen(qcol(C.PRI_DIM, 130), 1))
+        for x, sign in ((18, 1), (W - 18, -1)):
+            p.drawLine(QLineF(x, 65, x, H - 58))
+            p.drawLine(QLineF(x, 65, x + sign * 12, 53))
+            p.drawLine(QLineF(x, H - 58, x + sign * 12, H - 46))
+            for y in range(90, max(91, H - 75), 28):
+                p.drawLine(QLineF(x, y, x + sign * 4, y))
+        p.setFont(QFont(FONT_MONO, 7))
+        p.setPen(qcol(C.TEXT_MED))
+        p.drawText(QRectF(30, 20, W - 60, 18), Qt.AlignmentFlag.AlignLeft, "NÚCLEO / INTERFACE DE VOZ")
+        p.setPen(qcol(C.PRI_DIM))
+        p.drawText(QRectF(30, H - 28, W - 60, 16), Qt.AlignmentFlag.AlignLeft,
+                   "ÁUDIO SUSPENSO" if self.muted else "ENTRADA / VOZ + TEXTO")
+        p.drawText(QRectF(30, H - 28, W - 60, 16), Qt.AlignmentFlag.AlignRight, APP_VERSION)
+        p.restore()
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -862,6 +908,7 @@ class HudCanvas(QWidget):
             self._grid_cache = self._make_grid(W, H)
             self._grid_key   = _gkey
         p.drawPixmap(0, 0, self._grid_cache)
+        self._paint_hud_frame(p, W, H)
 
         # ── holographic head ────────────────────────────────────────────────
         # Sized to the band between the top of the canvas and the status line,
@@ -947,10 +994,11 @@ class HudCanvas(QWidget):
 
 class MetricBar(QWidget):
 
-    def __init__(self, label: str, color: str = C.PRI, parent=None):
+    def __init__(self, label: str, color: str = C.PRI, parent=None, *, remaining=False):
         super().__init__(parent)
         self._label = label
         self._color = color
+        self._remaining = remaining
         self._value = 0.0       # 0–100
         self._text  = "--"
         self.setFixedHeight(38)
@@ -985,9 +1033,12 @@ class MetricBar(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(QRectF(bar_x, bar_y, bar_w, bar_h), 2, 2)
 
-        if self._value > 85:
+        pressure = 100 - self._value if self._remaining else self._value
+        if self._text == "--":
+            bar_col = qcol(C.TEXT_DIM)
+        elif pressure > 85:
             bar_col = qcol(C.RED)
-        elif self._value > 65:
+        elif pressure > 65:
             bar_col = qcol(C.ACC)
         else:
             bar_col = qcol(self._color)
@@ -1004,7 +1055,7 @@ class MetricBar(QWidget):
 
         p.setFont(QFont(FONT_UI, 7, QFont.Weight.Bold))
         p.setPen(QPen(qcol(C.TEXT_DIM), 1))
-        p.drawText(QRectF(8, 5, 50, 14), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._label)
+        p.drawText(QRectF(8, 5, W - 47, 14), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._label)
 
         p.setFont(QFont(FONT_UI, 9, QFont.Weight.Bold))
         p.setPen(QPen(bar_col if self._text != "--" else qcol(C.TEXT_DIM), 1))
@@ -1014,6 +1065,7 @@ class MetricBar(QWidget):
 
 class LogWidget(QTextEdit):
     _sig = pyqtSignal(str)
+    _stream_sig = pyqtSignal(str, str, bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1029,7 +1081,8 @@ class LogWidget(QTextEdit):
                 color: {C.TEXT};
                 border: 1px solid {C.BORDER};
                 border-radius: 9px;
-                padding: 6px;
+                padding: 12px;
+                border-top: 1px solid {C.BORDER_B};
                 selection-background-color: {C.PRI_GHO};
             }}
             QScrollBar:vertical {{
@@ -1049,67 +1102,51 @@ class LogWidget(QTextEdit):
         self._pos     = 0
         self._tag     = "sys"
         self._ai_name_lc = "jarvis"   # updated when assistant name changes
-        self._tmr = QTimer(self)
-        self._tmr.timeout.connect(self._step)
+        self._live_blocks = {}
+        self._stream_sig.connect(self._update_stream)
         self._sig.connect(self._enqueue)
 
     def append_log(self, text: str):
         self._sig.emit(text)
 
+    def _format(self, text):
+        label, _, body = text.partition(":")
+        role = label.lower()
+        color = C.WHITE if role == "you" else C.PRI if role in (self._ai_name_lc, "jarvis") else C.TEXT_MED
+        fmt = self.textCursor().charFormat()
+        fmt.setForeground(QBrush(qcol(color)))
+        return ("Voc\u00ea:" + body if role == "you" else text), fmt
+
     def _enqueue(self, text: str):
-        self._queue.append(text)
-        if not self._typing:
-            self._next()
+        # Render arriving text immediately; a synthetic typewriter fell behind speech.
+        text, fmt = self._format(text)
+        cur = self.textCursor()
+        cur.movePosition(cur.MoveOperation.End)
+        cur.insertText(text, fmt)
+        cur.insertBlock()
+        self.setTextCursor(cur)
+        self.ensureCursorVisible()
 
-    def _next(self):
-        if not self._queue:
-            self._typing = False
-            return
-        self._typing = True
-        self._text   = self._queue.pop(0)
-        self._pos    = 0
-        tl = self._text.lower()
-        _ai_pfx = f"{self._ai_name_lc}:"
-        if   tl.startswith("you:"):                              self._tag = "you"
-        elif tl.startswith(_ai_pfx) or tl.startswith("jarvis:"): self._tag = "ai"
-        elif tl.startswith("file:"):                             self._tag = "file"
-        elif "err" in tl:                                        self._tag = "err"
-        else:                                                    self._tag = "sys"
-        if self._tag == "you":
-            self._text = "Você:" + self._text[4:]
-        self._tmr.start(6)
+    def stream_transcript(self, speaker, text, final=False):
+        self._stream_sig.emit(speaker, text, final)
 
-    def _step(self):
-        if self._pos < len(self._text):
-            ch  = self._text[self._pos]
+    def _update_stream(self, speaker, text, final):
+        block = self._live_blocks.get(speaker)
+        if text:
+            rendered, fmt = self._format(f"{speaker}: {' '.join(text.split())}")
             cur = self.textCursor()
-            fmt = cur.charFormat()
-            col = {
-                "you":  qcol(C.WHITE),
-                "ai":   qcol(C.PRI),
-                "err":  qcol(C.RED),
-                "file": qcol(C.GREEN),
-                # SYS lines are the bulk of the log. Amber fought the cyan HUD
-                # and, being a fixed status colour rather than a hue-linked one,
-                # stayed amber even after the accent picker retinted everything
-                # else. TEXT_MED follows the theme and drops the contrast to a
-                # level you can read past.
-                "sys":  qcol(C.TEXT_MED),
-            }.get(self._tag, qcol(C.TEXT))
-            fmt.setForeground(QBrush(col))
-            cur.movePosition(cur.MoveOperation.End)
-            cur.insertText(ch, fmt)
-            self.setTextCursor(cur)
+            if block is not None and block.isValid():
+                cur.setPosition(block.position())
+                cur.movePosition(cur.MoveOperation.EndOfBlock, cur.MoveMode.KeepAnchor)
+                cur.insertText(rendered, fmt)
+            else:
+                cur.movePosition(cur.MoveOperation.End)
+                cur.insertText(rendered, fmt)
+                self._live_blocks[speaker] = cur.block()
+                cur.insertBlock()
             self.ensureCursorVisible()
-            self._pos += 1
-        else:
-            self._tmr.stop()
-            cur = self.textCursor()
-            cur.movePosition(cur.MoveOperation.End)
-            cur.insertText("\n")
-            self.setTextCursor(cur)
-            self.ensureCursorVisible()
-            QTimer.singleShot(20, self._next)
+        if final:
+            self._live_blocks.pop(speaker, None)
 
 _FILE_ICONS = {
     "image":   ("🖼", "#00d4ff"), "video":   ("🎬", "#ff6b00"),
@@ -4252,6 +4289,7 @@ class RemoteKeyOverlay(QWidget):
 
 
 class MainWindow(QMainWindow):
+    _translation_sig = pyqtSignal(str)
     _log_sig        = pyqtSignal(str)
     _state_sig      = pyqtSignal(str)
     _remote_mute_sig = pyqtSignal(bool)
@@ -4272,6 +4310,7 @@ class MainWindow(QMainWindow):
     _quiz_sig       = pyqtSignal(str, object, object)  # (topic, questions, grader)
     _quiz_hide_sig  = pyqtSignal()
     _review_sig     = pyqtSignal(str, str, object, object)  # document review payload
+    _brief_sig      = pyqtSignal(object)                    # daily brief (dict from core.daily_brief)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -4292,9 +4331,11 @@ class MainWindow(QMainWindow):
         self.resize(_DEFAULT_W, _DEFAULT_H)
 
         screen = QApplication.primaryScreen().availableGeometry()
+        self.resize(max(_MIN_W, min(_DEFAULT_W, screen.width())),
+                    max(_MIN_H, min(_DEFAULT_H, screen.height())))
         self.move(
-            (screen.width()  - _DEFAULT_W) // 2,
-            (screen.height() - _DEFAULT_H) // 2,
+            screen.x() + (screen.width() - self.width()) // 2,
+            screen.y() + (screen.height() - self.height()) // 2,
         )
 
         self.on_text_command   = None
@@ -4540,6 +4581,13 @@ class MainWindow(QMainWindow):
         self._metric_tmr.start(2000)
         self._update_metrics()
 
+        from core.agent_usage import UsageMonitor
+        self._usage_monitor = UsageMonitor()
+        self._usage_tmr = QTimer(self)
+        self._usage_tmr.timeout.connect(self._update_agent_usage)
+        self._usage_tmr.start(5000)
+        self._update_agent_usage()
+
         self._log_sig.connect(self._log.append_log)
         self._state_sig.connect(self._apply_state)
         self._remote_mute_sig.connect(self._set_muted)
@@ -4553,6 +4601,12 @@ class MainWindow(QMainWindow):
         self._security_sig.connect(self._on_security_event)
         self._wake_btns_sig.connect(self._refresh_wake_btns)
         self._video_open_sig.connect(self._on_video_open)
+        from core.translation_overlay import TranslationOverlay
+        from core.live_translation import translation
+        self._translation_overlay = TranslationOverlay()
+        self._translation_sig.connect(self._translation_overlay.update_caption)
+        QApplication.instance().aboutToQuit.connect(translation.stop)
+        QApplication.instance().aboutToQuit.connect(self._translation_overlay.close)
         self._video_close_sig.connect(self._on_video_close)
         self._video_mute_sig.connect(self._on_video_mute)
         self._clipboard_sig.connect(self._show_clipboard_panel)
@@ -4560,6 +4614,7 @@ class MainWindow(QMainWindow):
         self._quiz_sig.connect(self._show_quiz)
         self._quiz_hide_sig.connect(self._hide_quiz)
         self._review_sig.connect(self._show_review)
+        self._brief_sig.connect(self._show_brief)
         self._cam_stop = threading.Event()
 
         # Camera preview overlay (child of central widget, positioned in resizeEvent)
@@ -5283,10 +5338,35 @@ class MainWindow(QMainWindow):
             self._proc_lbl.setText("PROC  --")
 
 
+    def _update_agent_usage(self):
+        from core.agent_usage import display
+        self._usage_monitor.refresh()
+        for engine, snapshot in self._usage_monitor.snapshot().items():
+            text, tooltip = display(snapshot)
+            windows = snapshot.get("windows", [])
+            for index, bar in enumerate(self._agent_usage_bars[engine]):
+                item = windows[index] if index < len(windows) else None
+                valid = item and (item.get("resets_at") is None or item["resets_at"] > time.time())
+                bar._label = f"{engine.upper()} {item['label'].upper() if item else ('5H', '7D')[index]}"
+                bar.set_value(item["remaining"] if valid else 0,
+                              f"{item['remaining']:g}%" if valid else "--")
+                bar.setToolTip(text + "\n" + tooltip + "\nPercentual restante da assinatura; não é contagem de mensagens.")
+
+    def _connect_claude_usage(self):
+        self._usage_monitor.refresh(force=True)
+        from core.agent_usage import display
+        snapshot = self._usage_monitor.snapshot()["claude"]
+        text, detail = display(snapshot)
+        self._show_content("Uso do Claude", f"{text}\n{detail}\n\n"
+                           "Consulta em segundo plano pelo login local do Claude Code. "
+                           "O painel atualiza automaticamente; não é necessário iniciar uma conversa. "
+                           "Se o login expirar, abra o Claude Code ou execute claude auth login.")
+        self._update_agent_usage()
+
     def _build_header(self) -> QWidget:
         w = QWidget()
-        w.setFixedHeight(54)
-        w.setStyleSheet(f"background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {C.PANEL2}, stop:1 {C.DARK}); border-bottom: 2px solid {C.PRI_DIM};")
+        w.setFixedHeight(72)
+        w.setStyleSheet(f"background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {C.PANEL2}, stop:1 {C.DARK}); border-bottom: 1px solid {C.BORDER_B};")
         lay = QHBoxLayout(w)
         lay.setContentsMargins(16, 0, 16, 0)
 
@@ -5334,7 +5414,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._ctrl_btn)
         lay.addStretch()
 
-        mid = QVBoxLayout(); mid.setSpacing(1)
+        mid = QVBoxLayout(); mid.setSpacing(3)
         _disp = self._assistant_name.upper()
         self._title_lbl = QLabel(_disp)
         self._title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -5350,9 +5430,9 @@ class MainWindow(QMainWindow):
             pass
         self._title_lbl.setStyleSheet(f"color: {C.PRI}; background: transparent;")
         mid.addWidget(self._title_lbl)
-        _sub_text = ("Um Assistente Amigável"
+        _sub_text = ("INTERFACE COGNITIVA / ASSISTENTE PESSOAL"
                      if _disp in ("JARVIS", "J.A.R.V.I.S")
-                     else "Assistente Pessoal de IA")
+                     else "INTERFACE COGNITIVA / ASSISTENTE PESSOAL")
         self._sub_lbl = QLabel(_sub_text)
         self._sub_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._sub_lbl.setFont(QFont(FONT_UI, 7))
@@ -5386,13 +5466,14 @@ class MainWindow(QMainWindow):
 
     def _build_left_panel(self) -> QWidget:
         w = QWidget()
-        w.setFixedWidth(_LEFT_W)
-        w.setStyleSheet(f"background: {C.DARK}; border-right: 1px solid {C.BORDER};")
+        w.setMinimumWidth(_LEFT_W - 18)
+        w.setObjectName("telemetryPanel")
+        w.setStyleSheet(f"QWidget#telemetryPanel {{ background: {C.DARK}; border-right: 1px solid {C.BORDER}; }}")
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(8, 10, 8, 10)
+        lay.setContentsMargins(12, 18, 12, 14)
         lay.setSpacing(6)
 
-        hdr = QLabel("◈ MONITOR")
+        hdr = QLabel("◈ TELEMETRIA")
         hdr.setFont(QFont(FONT_UI, 7, QFont.Weight.Bold))
         hdr.setStyleSheet(f"color: {C.PRI}; background: transparent; "
                           f"border-bottom: 1px solid {C.BORDER}; padding-bottom: 4px;")
@@ -5438,6 +5519,23 @@ class MainWindow(QMainWindow):
         lay.addWidget(info_panel)
         lay.addSpacing(4)
 
+        quota_hdr = QLabel("IA · USO RESTANTE")
+        quota_hdr.setFont(QFont(FONT_UI, 7, QFont.Weight.Bold))
+        quota_hdr.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        lay.addWidget(quota_hdr)
+        self._agent_usage_bars = {}
+        for engine in ("claude", "codex"):
+            bars = [MetricBar(f"{engine.upper()} {period}", C.PRI if engine == "claude" else C.ACC2,
+                              remaining=True) for period in ("5H", "7D")]
+            self._agent_usage_bars[engine] = bars
+            for bar in bars:
+                lay.addWidget(bar)
+        connect_usage = QPushButton("ATUALIZAR CLAUDE")
+        connect_usage.setFont(QFont(FONT_UI, 7))
+        connect_usage.setToolTip("Atualiza o uso da conta do Claude Code, inclusive com sessões no VS Code.")
+        connect_usage.clicked.connect(self._connect_claude_usage)
+        lay.addWidget(connect_usage)
+
         lay.addStretch()
 
         for txt, col in [
@@ -5454,19 +5552,33 @@ class MainWindow(QMainWindow):
             )
             lay.addWidget(lbl)
 
-        return w
+        w.setMinimumHeight(lay.sizeHint().height())
+        scroll = QScrollArea()
+        scroll.setFixedWidth(_LEFT_W)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(
+            f"QScrollArea {{ background: {C.DARK}; border: none; }}"
+            f"QScrollBar:vertical {{ background: {C.DARK}; width: 8px; }}"
+            f"QScrollBar::handle:vertical {{ background: {C.BORDER_A}; min-height: 24px; border-radius: 4px; }}"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+        )
+        scroll.setWidget(w)
+        return scroll
     def _build_right_panel(self) -> QWidget:
         w = QWidget()
         w.setFixedWidth(_RIGHT_W)
-        w.setStyleSheet(f"background: {C.DARK}; border-left: 1px solid {C.BORDER};")
+        w.setObjectName("commandPanel")
+        w.setStyleSheet(f"QWidget#commandPanel {{ background: {C.DARK}; border-left: 1px solid {C.BORDER}; }}")
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(8, 8, 8, 8)
-        lay.setSpacing(6)
+        lay.setContentsMargins(16, 18, 16, 14)
+        lay.setSpacing(10)
 
         def _sec(txt):
-            l = QLabel(f"▸ {txt}")
-            l.setFont(QFont(FONT_UI, 7, QFont.Weight.Bold))
-            l.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+            l = QLabel(f"/  {txt}")
+            l.setFont(QFont(FONT_MONO, 8, QFont.Weight.Bold))
+            l.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent; padding: 3px 0;")
             return l
 
         lay.addWidget(_sec("REGISTRO DE ATIVIDADE"))
@@ -5590,6 +5702,10 @@ class MainWindow(QMainWindow):
         google_btn.setStyleSheet(_BTN_STYLE_PRI)
         google_btn.clicked.connect(self._open_google_panel)
         lay.addWidget(google_btn)
+        mail_btn = QPushButton("EMAIL — GMAIL E HOTMAIL (LOGIN)")
+        mail_btn.setStyleSheet(_BTN_STYLE_PRI)
+        mail_btn.clicked.connect(self._open_mail_panel)
+        lay.addWidget(mail_btn)
 
         sc_btn = QPushButton("⊞  CRIAR ATALHO NA ÁREA DE TRABALHO")
         sc_btn.setFixedHeight(26)
@@ -5789,7 +5905,7 @@ class MainWindow(QMainWindow):
         self._input = QLineEdit()
         self._input.setPlaceholderText("Digite um comando ou pergunta…")
         self._input.setFont(QFont(FONT_UI, 9))
-        self._input.setFixedHeight(30)
+        self._input.setFixedHeight(38)
         self._input.setStyleSheet(f"""
             QLineEdit {{
                 background: #000d14; color: {C.WHITE};
@@ -5801,7 +5917,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self._input)
 
         send = QPushButton("▸")
-        send.setFixedSize(30, 30)
+        send.setFixedSize(38, 38)
         send.setFont(QFont(FONT_UI, 11, QFont.Weight.Bold))
         send.setCursor(Qt.CursorShape.PointingHandCursor)
         send.setStyleSheet(f"""
@@ -5875,7 +5991,11 @@ class MainWindow(QMainWindow):
         sep.setStyleSheet(f"color: {C.BORDER};"); lay.addWidget(sep)
 
         # ── text display ──────────────────────────────────────────────────────
-        self._content_display = QTextEdit()
+        # QTextBrowser: a QTextEdit that also follows links (news, events,
+        # project folders) in the system browser / explorer.
+        from PyQt6.QtWidgets import QTextBrowser
+        self._content_display = QTextBrowser()
+        self._content_display.setOpenExternalLinks(True)
         self._content_display.setReadOnly(True)
         self._content_display.setFont(QFont(FONT_UI, 8))
         self._content_display.setMinimumHeight(60)
@@ -5913,7 +6033,14 @@ class MainWindow(QMainWindow):
         self.hud.glance(0.0, -0.85, hold=1.3)
         self._content_title_lbl.setText(title.upper()[:48])
         self._content_ts_lbl.setText(_time.strftime("%H:%M:%S"))
-        self._content_display.setPlainText(text)
+        # Plain text, but with clickable links and **bold** - tools return
+        # issue links, news URLs and folders that are useful to open.
+        import re as _re
+        html = self._esc(text)
+        html = _re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", html)
+        html = _re.sub(r"(https?://[^\s<>&\"')\]]+|file:///[^\s<>&\"')\]]+)",
+                       lambda m: f'<a href="{m.group(1)}" style="color:{C.PRI};">{m.group(1)}</a>', html)
+        self._content_display.setHtml(f'<div style="color:{C.TEXT}; white-space:pre-wrap;">{html}</div>')
         self._content_display.moveCursor(
             self._content_display.textCursor().MoveOperation.Start
         )
@@ -5944,6 +6071,118 @@ class MainWindow(QMainWindow):
     def _esc(s) -> str:
         return (str(s or "").replace("&", "&amp;").replace("<", "&lt;")
                 .replace(">", "&gt;").replace("\n", "<br>"))
+
+    # ── daily brief ──────────────────────────────────────────────────────────
+    # Cards in Qt rich text: tables are what QTextDocument lays out reliably.
+    # News pictures arrive already downloaded (bytes) and are registered as
+    # document resources, so the panel never fetches anything itself.
+
+    _APP_COLORS = {"discord": "#5865F2", "whatsapp": "#25D366", "outlook": "#0078D4", "teams": "#6264A7",
+                   "vincular": "#0067C0", "phone": "#0067C0", "gmail": "#EA4335", "slack": "#4A154B",
+                   "telegram": "#229ED9", "github": "#8b949e"}
+
+    def _app_color(self, app: str) -> str:
+        a = (app or "").lower()
+        return next((c for k, c in self._APP_COLORS.items() if k in a), C.PRI)
+
+    def _show_brief(self, data: dict):
+        """Slot - Qt main thread. Daily brief as cards with pictures and links.
+
+        Order: what is personal and urgent first (agenda, reminders, important
+        notifications), then the news cards, then everything else."""
+        from PyQt6.QtGui import QTextDocument
+        # A fresh document: setHtml() on the old one would drop the image
+        # resources registered for the news pictures.
+        doc = QTextDocument(self._content_display)
+        doc.setDefaultFont(self._content_display.font())
+        sections = data.get("sections", [])
+        head = [s for s in sections if s.get("important") or s.get("icon") in ("📅", "⏰")]
+        tail = [s for s in sections if s not in head]
+
+        parts = [f'<div style="font-family:{FONT_UI}; color:{C.TEXT};">']
+        for s in head:
+            parts += self._brief_section(s)
+        parts += self._brief_news(doc, data.get("news") or [])
+        for s in tail:
+            parts += self._brief_section(s)
+        parts.append("</div>")
+
+        import time as _time
+        self.hud.glance(0.0, -0.85, hold=1.3)
+        self._content_title_lbl.setText(f'{data.get("title", "Resumo do dia")} - {data.get("when", "")}'[:48].upper())
+        self._content_ts_lbl.setText(_time.strftime("%H:%M:%S"))
+        doc.setHtml("".join(parts))
+        self._content_display.setDocument(doc)
+        self._content_display.moveCursor(self._content_display.textCursor().MoveOperation.Start)
+        first_show = not self._content_panel.isVisible()
+        self._content_panel.show()
+        if first_show:
+            total = self._center_split.height()
+            self._center_split.setSizes([max(total - 320, 120), 320, 0])
+
+    def _brief_news(self, doc, news) -> list:
+        from datetime import datetime as _dt
+        from PyQt6.QtGui import QImage, QTextDocument
+        e = self._esc
+
+        def local_time(stamp: str) -> str:
+            try:
+                return _dt.fromisoformat(stamp.replace("Z", "+00:00")).astimezone().strftime("%H:%M")
+            except Exception:
+                return ""
+
+        news = [n for n in news if n.get("url")][:6]
+        if not news:
+            return []
+        parts = [f'<p style="color:{C.PRI}; font-weight:bold; margin:10px 0 4px 0;">📰 NOTÍCIAS</p>'
+                 '<table width="100%" cellspacing="6" cellpadding="0"><tr>']
+        for i, n in enumerate(news):
+            if i and i % 3 == 0:
+                parts.append("</tr><tr>")
+            img_html = ""
+            if n.get("image"):
+                img = QImage.fromData(n["image"])
+                if not img.isNull():
+                    img = img.scaled(220, 124, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                     Qt.TransformationMode.SmoothTransformation).copy(0, 0, 220, 124)
+                    name = f"brief://news{i}"
+                    doc.addResource(QTextDocument.ResourceType.ImageResource.value, QUrl(name), img)
+                    img_html = f'<a href="{e(n["url"])}"><img src="{name}" width="220" height="124"></a><br>'
+            when = local_time(n.get("date", ""))
+            parts.append(
+                f'<td width="33%" valign="top" style="background-color:{C.PANEL}; padding:6px;">'
+                f'{img_html}<a href="{e(n["url"])}" style="color:{C.WHITE}; text-decoration:none;">'
+                f'<b>{e(n["title"][:110])}</b></a><br>'
+                f'<span style="color:{C.TEXT_DIM}; font-size:7pt;">{e(n.get("source", ""))}'
+                f'{" · " + when if when else ""}</span></td>')
+        parts.append("</tr></table>")
+        return parts
+
+    def _brief_section(self, s) -> list:
+        e = self._esc
+        items = s.get("items") or []
+        if not items and not s.get("important"):
+            return []
+        color = C.ACC if s.get("important") and items else C.PRI
+        parts = [f'<p style="color:{color}; font-weight:bold; margin:10px 0 4px 0;">'
+                 f'{e(s.get("icon", ""))} {e(s["title"]).upper()}</p>']
+        if not items:
+            return parts + [f'<p style="color:{C.TEXT_DIM}; margin:0 0 0 14px;">nada por aqui</p>']
+        parts.append('<table width="100%" cellspacing="0" cellpadding="4">')
+        for it in items:
+            badge = ""
+            if it.get("app"):
+                badge = (f'<span style="background-color:{self._app_color(it["app"])}; color:#ffffff;'
+                         f' font-size:7pt; font-weight:bold;">&nbsp;{e(it["app"])}&nbsp;</span> ')
+            text = e(it.get("text", ""))
+            if it.get("link"):
+                text = f'<a href="{e(it["link"])}" style="color:{C.PRI};">{text}</a>'
+            sub = (f'<br><span style="color:{C.TEXT_DIM};">{e(it["sub"][:180])}</span>'
+                   if it.get("sub") else "")
+            parts.append(f'<tr><td style="border-bottom:1px solid {C.BORDER};">{badge}'
+                         f'<span style="color:{C.WHITE};">{text}</span>{sub}</td></tr>')
+        parts.append("</table>")
+        return parts
 
     def _show_review(self, title: str, summary: str, findings, unclear):
         """Slot — Qt main thread. Lays a document review into the content panel."""
@@ -6280,7 +6519,7 @@ class MainWindow(QMainWindow):
 
     def _build_footer(self) -> QWidget:
         w = QWidget()
-        w.setFixedHeight(22)
+        w.setFixedHeight(30)
         w.setStyleSheet(f"background: {C.DARK}; border-top: 1px solid {C.BORDER};")
         lay = QHBoxLayout(w); lay.setContentsMargins(14, 0, 14, 0)
 
@@ -6335,6 +6574,13 @@ class MainWindow(QMainWindow):
             self._continuity_panel = ContinuityPanel(self)
         self._continuity_panel.show()
         self._continuity_panel.raise_()
+
+    def _open_mail_panel(self):
+        from core.mail_panel import MailPanel
+        if not getattr(self, '_mail_panel', None):
+            self._mail_panel = MailPanel(self)
+        self._mail_panel.show()
+        self._mail_panel.raise_()
 
     def _open_google_panel(self):
         from core.google_panel import GooglePanel
@@ -6487,7 +6733,7 @@ class MainWindow(QMainWindow):
 
     def _wake_state(self) -> dict:
         """Combined state for the two wake-word buttons. Readiness is a cheap,
-        deterministic on-disk check now (see core.wake_word.is_ready), so there
+        deterministic on-disk check now (see core.voice_activation.is_ready), so there
         is nothing to cache — the button never flickers to a stale value."""
         if self.wake_get_state:
             try:
@@ -6500,7 +6746,7 @@ class MainWindow(QMainWindow):
         # Before JarvisLive has wired its callback (drawer built at startup).
         ready, enabled = False, False
         try:
-            from core.wake_word import is_ready
+            from core.voice_activation import is_ready
             from memory.config_manager import get_wake_word_enabled
             ready, enabled = is_ready(), get_wake_word_enabled()
         except Exception:
@@ -6510,6 +6756,8 @@ class MainWindow(QMainWindow):
     def _refresh_wake_btns(self):
         if not hasattr(self, '_wake_btn'):
             return
+        self._wake_btn.setToolTip(
+            "Na escuta contínua, cada pedido precisa conter Jarvis e corresponder à sua voz cadastrada.")
         st = self._wake_state()
         _on = f"""
             QPushButton {{ background: #001a08; color: {C.GREEN};
@@ -6527,7 +6775,7 @@ class MainWindow(QMainWindow):
             self._wake_btn.setStyleSheet(_off)
             self._wake_sleep_btn.hide()
         elif st["enabled"]:
-            self._wake_btn.setText("🎙  PALAVRA DE ATIVAÇÃO: LIG.")
+            self._wake_btn.setText("🎙  JARVIS + SUA VOZ: LIG.")
             self._wake_btn.setStyleSheet(_on)
             self._wake_sleep_btn.show()
             self._wake_sleep_btn.setText("😴  DORMIR AGORA" if st["awake"] else "👂  ACORDAR AGORA")
@@ -6663,12 +6911,12 @@ class MainWindow(QMainWindow):
     def _toggle_wake_word(self):
         st = self._wake_state()
         if not st["ready"]:
-            # First time: download openwakeword + model in a worker thread.
+            # First time: download local keyword + speaker models in a worker thread.
             self._wake_btn.setText("⬇  BAIXANDO… (só uma vez)")
             self._wake_btn.setEnabled(False)
             def _work():
                 try:
-                    from core.wake_word import install_and_download
+                    from core.voice_activation import install_and_download
                     ok, msg = install_and_download(
                         logger=lambda m: self._log_sig.emit(f"SYS: {m}"))
                 except Exception as e:
@@ -7228,6 +7476,9 @@ class JarvisUI:
     def set_microphone_muted(self, muted: bool):
         self._win._remote_mute_sig.emit(bool(muted))
 
+    def stream_transcript(self, speaker: str, text: str, final=False):
+        self._win._log.stream_transcript(speaker, text, final)
+
     def write_log(self, text: str):
         self._win._log_sig.emit(text)
 
@@ -7256,6 +7507,10 @@ class JarvisUI:
         """Thread-safe: clear any quiz currently on the board."""
         self._win._quiz_hide_sig.emit()
 
+    def show_brief(self, data: dict) -> None:
+        """Thread-safe: daily brief as cards (news with picture and link)."""
+        self._win._brief_sig.emit(data)
+
     def show_review(self, title: str, summary: str, findings, unclear=None) -> None:
         """Thread-safe: lay a document review into the panel below the HUD.
 
@@ -7282,6 +7537,10 @@ class JarvisUI:
 
     def stop_security_camera(self):
         self._win.stop_camera_stream()
+
+    def show_translation_caption(self, text: str) -> None:
+        """Thread-safe floating subtitles for computer audio."""
+        self._win._translation_sig.emit(str(text or ""))
 
     def show_video(self, source: str, title: str = "", muted: bool = True,
                    audio_source: str = "") -> None:

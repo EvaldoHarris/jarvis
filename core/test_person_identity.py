@@ -39,6 +39,16 @@ class IdentityTests(unittest.TestCase):
         self.assertIsNone(identity.best_match([0, 1], profiles, "face", .45))
         self.assertIsNone(identity.best_match([1, 0], profiles, "face", .45))
 
+    def test_short_and_full_name_near_identical_references_do_not_compete(self):
+        profiles = {'Evaldo': {'face': [1, 0]}, 'Evaldo Full Name': {'face': [.99, .01]},
+                    'Someone Else': {'face': [0, 1]}}
+        result = identity.best_match([1, .01], profiles, 'face', .45)
+        self.assertIn(result, ('Evaldo', 'Evaldo Full Name'))
+        self.assertFalse(identity.same_face_profile('Evaldo', 'Someone Else', profiles))
+        # A shared first name alone is insufficient to group different faces.
+        profiles['Evaldo Full Name']['face'] = [0, 1]
+        self.assertFalse(identity.same_face_profile('Evaldo', 'Evaldo Full Name', profiles))
+
     def test_register_requires_name_and_does_not_overwrite(self):
         with self.assertRaises(ValueError):
             identity.manage_identity("register", "")
@@ -47,33 +57,48 @@ class IdentityTests(unittest.TestCase):
             identity.manage_identity("register", "Evaldo")
 
     def test_registration_and_forgetting_store_no_photo_or_audio(self):
-        with patch.object(identity, "recent_voice", return_value=np.ones(32000)), \
+        with patch.object(identity, "recent_voice", side_effect=AssertionError("Voice must not be required")), \
                 patch.object(identity, "face_embedding", return_value=np.array([1., 0.])), \
                 patch.object(identity, "voice_embedding", return_value=np.array([0., 1.])):
             result = identity.manage_identity("register", "Evaldo")
         self.assertEqual(result["registered"], "Evaldo")
         self.assertEqual(set(self.profile_path.parent.iterdir()), {self.profile_path})
         self.assertEqual(set(identity.load_profiles()["Evaldo"]),
-                         {"face", "voice", "face_model", "voice_model"})
+                         {"face", "face_model"})
         identity.manage_identity("forget", "Evaldo")
         self.assertEqual(identity.load_profiles(), {})
 
-    def test_both_modalities_must_agree(self):
+    def test_camera_match_does_not_require_matching_voice(self):
         identity._save_profiles({"Evaldo": {"face": [1, 0], "voice": [1, 0]},
                                  "Outro": {"face": [0, 1], "voice": [0, 1]}})
-        with patch.object(identity, "recent_voice", return_value=np.ones(32000)), \
+        with patch.object(identity, "recent_voice", side_effect=AssertionError("Voice must not be required")), \
                 patch.object(identity, "face_embedding", return_value=np.array([1., 0.])), \
                 patch.object(identity, "voice_embedding", return_value=np.array([0., 1.])):
+            result = identity.manage_identity("identify")
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(result["name"], "Evaldo")
+
+    def test_camera_identifies_without_recent_audio(self):
+        identity._save_profiles({"Evaldo": {"face": [1, 0], "voice": [1, 0]}})
+        with patch.object(identity, "recent_voice", side_effect=AssertionError("Voice must not be required")), \
+                patch.object(identity, "face_embedding", return_value=np.array([1., 0.])), \
+                patch.object(identity, "voice_embedding", return_value=np.array([1., 0.])):
+            self.assertEqual(identity.manage_identity("identify")["name"], "Evaldo")
+
+    def test_unknown_face_is_not_confirmed(self):
+        identity._save_profiles({"Evaldo": {"face": [1, 0]}})
+        with patch.object(identity, "face_embedding", return_value=np.array([0., 1.])):
             result = identity.manage_identity("identify")
         self.assertEqual(result["status"], "unverified")
         self.assertIsNone(result["name"])
 
-    def test_matching_face_and_voice_confirm_name(self):
-        identity._save_profiles({"Evaldo": {"face": [1, 0], "voice": [1, 0]}})
-        with patch.object(identity, "recent_voice", return_value=np.ones(32000)), \
-                patch.object(identity, "face_embedding", return_value=np.array([1., 0.])), \
-                patch.object(identity, "voice_embedding", return_value=np.array([1., 0.])):
-            self.assertEqual(identity.manage_identity("identify")["name"], "Evaldo")
+    def test_face_models_do_not_require_speaker_model(self):
+        with tempfile.TemporaryDirectory() as folder:
+            models = Path(folder)
+            (models / "yunet.onnx").touch()
+            (models / "sface.onnx").touch()
+            with patch.object(identity, "MODELS", models):
+                identity._require_models()
 
     def test_no_profiles_returns_actionable_tool_failure(self):
         result = json.loads(person_identity({"action": "identify"}))

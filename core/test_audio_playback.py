@@ -1,10 +1,35 @@
 import asyncio
 import unittest
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
-from core.audio_playback import collect_audio, PlaybackClock, offer_latest_audio
+from core.audio_playback import collect_audio, PlaybackClock, offer_latest_audio, write_audio
 
 
 class AudioPlaybackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_blocked_output_driver_times_out_instead_of_silently_hanging(self):
+        release = threading.Event()
+        executor = ThreadPoolExecutor(max_workers=1)
+        stream = SimpleNamespace(write=lambda pcm: release.wait(1))
+        try:
+            with self.assertRaisesRegex(RuntimeError, "stopped consuming"):
+                await write_audio(asyncio.get_running_loop(), executor, stream, b"pcm", timeout=.02)
+        finally:
+            release.set()
+            executor.shutdown(wait=True)
+
+    async def test_audio_writer_preserves_pcm_and_underflow_result(self):
+        written = []
+        def write(pcm):
+            written.append(pcm)
+            return True
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            result = await write_audio(asyncio.get_running_loop(), executor,
+                                       SimpleNamespace(write=write), b"pcm")
+        self.assertTrue(result)
+        self.assertEqual(written, [b"pcm"])
+
     async def test_microphone_can_release_without_server_turn_complete(self):
         clock = PlaybackClock()
         clock.written(9600, started=10., latency=.2)

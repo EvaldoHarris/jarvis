@@ -3,6 +3,7 @@ import json
 import threading
 import time
 import uuid
+import unicodedata
 from collections import deque
 from pathlib import Path
 
@@ -37,12 +38,12 @@ def feed_microphone(pcm, sample_rate=16000):
         _audio.append(bytes(pcm))
 
 
-def recent_voice():
+def recent_voice(min_samples=32000):
     with _audio_lock:
         if time.monotonic() - _last_speech > 12:
             raise ValueError("Não há voz recente. Fale uma frase de pelo menos 3 segundos e tente novamente.")
         samples = np.frombuffer(b"".join(_audio), dtype=np.int16).astype(np.float32) / 32768
-    if samples.size < 32000:
+    if samples.size < min_samples:
         raise ValueError("A fala foi curta. Diga uma frase de pelo menos 3 segundos para reconhecer a voz.")
     return samples
 
@@ -75,6 +76,8 @@ def best_match(vector, profiles, kind, threshold):
     scores = []
     vector = _unit(vector)
     for name, profile in profiles.items():
+        if kind not in profile:
+            continue
         candidate = _unit(profile[kind])
         if candidate.shape == vector.shape:
             scores.append((float(vector @ candidate), name))
@@ -82,17 +85,35 @@ def best_match(vector, profiles, kind, threshold):
     if not scores or scores[0][0] < threshold:
         return None
     if len(scores) > 1 and scores[0][0] - scores[1][0] < 0.08:
-        return None
+        # A short name and its full-name enrollment must not compete against
+        # themselves. Require both a name prefix and near-identical references;
+        # unrelated names/ambiguous lookalikes still refuse a match.
+        winner = scores[0][1]
+        competing = [name for score, name in scores[1:] if scores[0][0] - score < .08]
+        if kind != 'face' or any(not same_face_profile(winner, name, profiles) for name in competing):
+            return None
     return scores[0][1]
 
 
-def _require_models():
-    expected = ("yunet.onnx", "sface.onnx", "speaker.onnx")
+def same_face_profile(first, second, profiles):
+    def words(name):
+        return unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode().casefold().split()
+    a, b = words(first), words(second)
+    if not a or not b or not (a == b[:len(a)] or b == a[:len(b)]):
+        return False
+    try:
+        return float(_unit(profiles[first]['face']) @ _unit(profiles[second]['face'])) >= .8
+    except (KeyError, ValueError):
+        return False
+
+
+def _require_models(expected=("yunet.onnx", "sface.onnx")):
     if any(not (MODELS / name).is_file() for name in expected):
-        raise ValueError("Modelos ausentes. Execute: python setup_identity.py")
+        command = "python setup_identity.py --voice" if "speaker.onnx" in expected else "python setup_identity.py"
+        raise ValueError(f"Modelos ausentes. Execute: {command}")
 
 
-def face_embedding():
+def face_observation():
     global _face_models
     import cv2
     from actions.screen_processor import _capture_camera
@@ -111,17 +132,27 @@ def face_embedding():
         detector, recognizer = _face_models
         detector.setInputSize((width, height))
         _, faces = detector.detect(frame)
-        if faces is None or len(faces) != 1:
-            raise ValueError("Preciso de exatamente uma pessoa visível na câmera para associar rosto e voz.")
-        aligned = recognizer.alignCrop(frame, faces[0])
-        return _unit(recognizer.feature(aligned))
+        vectors = []
+        for face in (faces if faces is not None else []):
+            if min(face[2], face[3]) < 48:
+                continue  # tiny background faces cannot provide reliable identity
+            aligned = recognizer.alignCrop(frame, face)
+            vectors.append(_unit(recognizer.feature(aligned)))
+        return {'vectors': vectors, 'image': image, 'face_count': len(vectors)}
+
+
+def face_embedding():
+    observation = face_observation()
+    if observation['face_count'] != 1:
+        raise ValueError("Preciso de exatamente uma pessoa visível na câmera para reconhecer o rosto.")
+    return observation['vectors'][0]
 
 
 def voice_embedding(samples):
     global _voice_model
     import sherpa_onnx
 
-    _require_models()
+    _require_models(("speaker.onnx",))
     with _model_lock:
         if _voice_model is None:
             config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
@@ -148,6 +179,22 @@ def manage_identity(action, name="", replace=False):
             del profiles[name]
             _save_profiles(profiles)
             return {"status": "done", "removed": name}
+        if action == "register_voice":
+            if not name.strip() or len(name.strip()) > 80:
+                raise ValueError("Informe um nome entre 1 e 80 caracteres.")
+            name = name.strip()
+            profile = profiles.get(name, {})
+            if "voice" in profile and not replace:
+                raise ValueError("Voz já cadastrada. Use replace somente a pedido explícito.")
+            vector = voice_embedding(recent_voice())
+            from memory.config_manager import get_input_device
+            profile.update(voice=vector.tolist(), voice_model="wespeaker-en-resnet34-LM",
+                           voice_input_device=get_input_device())
+            profiles[name] = profile
+            _save_profiles(profiles)
+            from memory.config_manager import save_voice_owner
+            save_voice_owner(name)
+            return {"status": "done", "registered_voice": name, "wake_word": "Jarvis"}
         if action not in ("register", "identify"):
             raise ValueError("Use register, identify, list ou forget.")
         name = name.strip()
@@ -157,18 +204,45 @@ def manage_identity(action, name="", replace=False):
             if name in profiles and not replace:
                 raise ValueError("Nome já cadastrado. Só substitua após pedido explícito do usuário.")
         elif not profiles:
-            raise ValueError("Nenhuma pessoa cadastrada. Peça para cadastrar rosto e voz primeiro.")
-        samples = recent_voice()  # freeze the user's last phrase before camera warmup
+            raise ValueError("Nenhuma pessoa cadastrada. Peça para cadastrar o rosto pela câmera primeiro.")
         face = face_embedding()
-        voice = voice_embedding(samples)
         if action == "register":
-            profiles[name] = {"face": face.tolist(), "voice": voice.tolist(),
-                              "face_model": "sface-2021dec", "voice_model": "wespeaker-en-resnet34-LM"}
+            profiles.setdefault(name, {}).update(face=face.tolist(), face_model="sface-2021dec")
             _save_profiles(profiles)
             return {"status": "done", "registered": name, "stored_locally": True}
         face_name = best_match(face, profiles, "face", 0.45)
-        voice_name = best_match(voice, profiles, "voice", 0.65)
-        matched = face_name if face_name and face_name == voice_name else None
-        return {"status": "done" if matched else "unverified", "name": matched,
-                "face_match": face_name, "voice_match": voice_name,
-                "reason": None if matched else "Rosto e voz não confirmaram a mesma pessoa."}
+        return {"status": "done" if face_name else "unverified", "name": face_name,
+                "face_match": face_name,
+                "reason": None if face_name else "O rosto na câmera não confirmou uma pessoa cadastrada."}
+
+
+def verify_voice_owner(samples):
+    """Fail closed: only the explicitly configured owner's voice may activate."""
+    from memory.config_manager import load_api_keys
+    from core.voice_health import record
+    config = load_api_keys()
+    owner = (config.get("voice_owner") or config.get("user_name") or "").strip()
+    profiles = load_profiles()
+    if not owner or "voice" not in profiles.get(owner, {}):
+        record("activation_owner_enrollment_missing")
+        return None
+    samples = np.asarray(samples, dtype=np.float32)
+    if samples.size < 5600:  # A short keyword is allowed; never pad/repeat speech.
+        record("activation_voice_sample_too_short")
+        return None
+    vector = _unit(voice_embedding(samples))
+    reference = _unit(profiles[owner]["voice"])
+    if vector.shape != reference.shape:
+        record("activation_voice_model_incompatible")
+        return None
+    score = float(vector @ reference)
+    competitors = [_unit(profile["voice"]) for name, profile in profiles.items()
+                   if name != owner and "voice" in profile]
+    others = [float(vector @ candidate) for candidate in competitors if candidate.shape == vector.shape]
+    margin = score - max(others) if others else None
+    reason = "below_threshold" if score < .65 else (
+        "ambiguous" if margin is not None and margin < .08 else "matched")
+    record(f"activation_voice_comparison reason={reason} score={score:.3f} "
+           f"threshold=0.650 margin={margin if margin is None else round(margin, 3)}")
+    match = best_match(vector, profiles, "voice", 0.65)
+    return owner if match == owner else None

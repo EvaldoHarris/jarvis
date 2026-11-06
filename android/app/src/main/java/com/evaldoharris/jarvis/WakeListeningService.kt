@@ -20,6 +20,15 @@ import android.speech.SpeechRecognizer
 
 /** Explicit microphone foreground service; never starts from boot or a remote command. */
 class WakeListeningService : Service() {
+    companion object {
+        const val ARM="jarvis.arm_listening"
+        @Volatile internal var current:WakeListeningService?=null
+        fun arm(context:android.content.Context):Boolean {
+            if(context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED)return false
+            return runCatching { context.startForegroundService(Intent(context,WakeListeningService::class.java).setAction(ARM));true }
+                .onFailure { android.util.Log.w("JarvisReactor","Android blocked background microphone activation; opening foreground fallback",it) }.getOrDefault(false)
+        }
+    }
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var store: SecureStore
     private var recognizer: SpeechRecognizer? = null
@@ -38,10 +47,46 @@ class WakeListeningService : Service() {
     // Frase que o Google entendeu sem o nome; se o detector ouvir "Jarvis" logo em seguida, ela vira o pedido.
     private var pendingText = ""
     private var pendingAt = 0L
+    private var forcedUntil=0L
+    private var translationControl:TranslationVoiceControl?=null
+    private var controlGeneration=0
+    internal fun tapArmed()=forced()
+    internal fun localStopListening()=translationControl?.isListening==true
+    private fun forced()=System.currentTimeMillis()<forcedUntil
+    private fun mode()=if(forced())"wake" else store.get("voice_mode","wake")
+    private fun closeTranslationControl(){controlGeneration++;translationControl?.close();translationControl=null}
+    internal fun releaseForManual(){closeTranslationControl();if(listening)cancelListening()}
+    private fun dispatch(command:String) {
+        forcedUntil=0
+        try {
+            if(VideoTranslationState.active&&TranslationPolicy.command(command)=="stop") {
+                FeatureTools.videoTranslation(this,"stop");AppState.message("JARVIS","Tradução encerrada.")
+            } else {
+                store.put("speak","true")
+                AppState.assistant?.ask(command,targetPc=store.get("voice_target_pc")=="true"){GeminiVoice.speak(applicationContext,it)}
+            }
+        } finally { VideoTranslationState.pauseNarrationUntil=0 }
+    }
     private val tick = object : Runnable {
         override fun run() {
             if (stopping) return
-            val mode = store.get("voice_mode", "wake")
+            if(VideoTranslationState.active&&!forced()) {
+                if(listening)cancelListening()
+                if(AppState.manualListening){closeTranslationControl()}
+                else if(translationControl==null&&System.currentTimeMillis()>=nextListen) {
+                    val id=++controlGeneration
+                    translationControl=TranslationVoiceControl(this@WakeListeningService,{
+                        handler.post { if(!stopping&&id==controlGeneration){closeTranslationControl();dispatch("pare a tradução")} }
+                    },{
+                        handler.post { if(!stopping&&id==controlGeneration){closeTranslationControl();nextListen=System.currentTimeMillis()+6000;AppState.message("SYS","Não consegui ouvir o comando local de parada. Toque no reator ou use Parar na notificação.")} }
+                    })
+                }
+                AppState.wakeReadyUntil=0
+                if(AppState.phase!="TRADUZINDO — DIGA JARVIS, PARE A TRADUÇÃO") {AppState.phase="TRADUZINDO — DIGA JARVIS, PARE A TRADUÇÃO";AppState.update()}
+                handler.postDelayed(this,250);return
+            }
+            closeTranslationControl()
+            val mode = mode()
             if (mode == "off") { stopSelf(); return }
             if(mode!="wake"){phrase.reset();needsCue=false;AppState.wakeReadyUntil=0}
             if (AppState.expectedPhoneReply.isNotEmpty() && AppState.phoneReplyDeadline > 0 && System.currentTimeMillis() > AppState.phoneReplyDeadline) {
@@ -57,6 +102,7 @@ class WakeListeningService : Service() {
     }
     override fun onCreate() {
         super.onCreate(); store = SecureStore(this)
+        current=this
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { stopSelf(); return }
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel("jarvis_microphone", "Escuta do JARVIS", NotificationManager.IMPORTANCE_LOW))
@@ -72,9 +118,15 @@ class WakeListeningService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "stop") { store.put("voice_mode", "off"); stopSelf(); return START_NOT_STICKY }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { stopSelf(); return START_NOT_STICKY }
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) { AppState.message("SYS", "Nenhum serviço de reconhecimento de voz disponível."); stopSelf(); return START_NOT_STICKY }
+        if (!VideoTranslationState.active&&!SpeechRecognizer.isRecognitionAvailable(this)) { AppState.message("SYS", "Nenhum serviço de reconhecimento de voz disponível."); stopSelf(); return START_NOT_STICKY }
         if (AppState.assistant == null) AppState.assistant = JarvisAssistant(applicationContext)
         phrase.configureAlias(store.get("wake_alias"))
+        if(intent?.action==ARM) {
+            releaseForManual();AppState.assistant?.cancel();GeminiVoice.stop();AppState.stopRemoteSpeech?.invoke()
+            forcedUntil=System.currentTimeMillis()+15000;VideoTranslationState.pauseNarrationUntil=forcedUntil
+            pendingText="";phrase.reset();phrase.arm(System.currentTimeMillis());needsCue=true;nextListen=System.currentTimeMillis()+350
+            AppState.phase="PREPARANDO ESCUTA";AppState.update()
+        }
         handler.removeCallbacks(tick); handler.post(tick)
         return START_NOT_STICKY
     }
@@ -90,7 +142,7 @@ class WakeListeningService : Service() {
             needsCue=false;phrase.arm(now);cue?.play()
         }
         AppState.wakeReadyUntil=if(recognitionReady&&phrase.armed(now))phrase.deadline()else 0
-        val phase = if(!recognitionReady) "PREPARANDO ESCUTA" else if (phrase.armed(now)) "PODE FALAR" else if (store.get("voice_mode", "wake") == "wake") "AGUARDANDO JARVIS" else "OUVINDO"
+        val phase = if(!recognitionReady) "PREPARANDO ESCUTA" else if (phrase.armed(now)) "PODE FALAR" else if (mode() == "wake") "AGUARDANDO JARVIS" else "OUVINDO"
         if (AppState.phase != phase) { AppState.phase = phase; AppState.update() }
     }
     private fun result(results: Bundle?) {
@@ -100,13 +152,12 @@ class WakeListeningService : Service() {
         val text = if(phrase.expectingFollowup(System.currentTimeMillis()))candidates.firstOrNull().orEmpty() else
             WakeWords.choose(candidates,results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES),store.get("wake_alias"))
         val now=System.currentTimeMillis();val wasArmed=phrase.armed(now)
-        val command = phrase.command(text, store.get("voice_mode", "wake"), now)
+        val command = phrase.command(text, mode(), now)
         if (command == null && text.isNotBlank() && !phrase.armed(now)) { pendingText = text; pendingAt = now }
         if (command != null) {
             pendingText = ""
             needsCue=false;AppState.wakeReadyUntil=0
-            store.put("speak", "true")
-            AppState.assistant?.ask(command, targetPc = store.get("voice_target_pc") == "true") { GeminiVoice.speak(applicationContext, it) }
+            dispatch(command)
         } else {
             if(!wasArmed&&phrase.armed(now)){needsCue=true;AppState.assistant?.warmLive()}
             updateListeningPhase()
@@ -114,7 +165,7 @@ class WakeListeningService : Service() {
     }
     /** O detector offline ouviu o nome. */
     private fun spotted(word: String) {
-        if (stopping || busy() || store.get("voice_mode", "wake") != "wake") return
+        if (stopping || busy() || mode() != "wake") return
         val now = System.currentTimeMillis()
         android.util.Log.d("JarvisWake", "spotter_wake=$word")
         // O Google já entregou a frase inteira (sem reconhecer o nome): executa como pedido.
@@ -122,8 +173,7 @@ class WakeListeningService : Service() {
         pendingText = ""
         if (recent.isNotBlank()) {
             needsCue = false; AppState.wakeReadyUntil = 0; phrase.reset()
-            store.put("speak", "true")
-            AppState.assistant?.ask(recent, targetPc = store.get("voice_target_pc") == "true") { GeminiVoice.speak(applicationContext, it) }
+            dispatch(recent)
             return
         }
         if (!phrase.armed(now)) { phrase.arm(now); needsCue = true }
@@ -137,7 +187,10 @@ class WakeListeningService : Service() {
             recognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
                 setRecognitionListener(object : RecognitionListener {
                     private fun valid() = current == generation && listening && !stopping
-                    override fun onReadyForSpeech(params: Bundle?) { if (valid()) { recognitionReady=true;updateListeningPhase() } }
+                    override fun onReadyForSpeech(params: Bundle?) { if (valid()) {
+                        if(forced()){phrase.arm(System.currentTimeMillis());forcedUntil=phrase.deadline();VideoTranslationState.pauseNarrationUntil=forcedUntil;needsCue=true}
+                        recognitionReady=true;updateListeningPhase()
+                    } }
                     override fun onSegmentResults(segmentResults: Bundle) {
                         if (!valid()) return
                         android.util.Log.d("JarvisWake", "segment_received")
@@ -176,7 +229,7 @@ class WakeListeningService : Service() {
                         if(!valid()||busy()||!segmentedEstablished||!recognitionReady)return
                         val text=partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
                         if(text.isNotBlank())android.util.Log.d("JarvisWakeText","partial=$text")
-                        if(phrase.preview(text,store.get("voice_mode","wake"),System.currentTimeMillis())){needsCue=true;AppState.assistant?.warmLive();updateListeningPhase()}
+                        if(phrase.preview(text,mode(),System.currentTimeMillis())){needsCue=true;AppState.assistant?.warmLive();updateListeningPhase()}
                     }
                     override fun onEvent(eventType: Int, params: Bundle?) = Unit
                 })
@@ -191,7 +244,7 @@ class WakeListeningService : Service() {
             if (Build.VERSION.SDK_INT >= 33) {
                 intent.putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS,WakeWords.bias(store.get("wake_alias")))
                 spotter?.close()
-                spotter = if (store.get("voice_mode", "wake") == "wake") WakeSpotter { word -> handler.post { spotted(word) } } else null
+                spotter = if (mode() == "wake") WakeSpotter { word -> handler.post { spotted(word) } } else null
                 val capture = ContinuousMicrophone({ busy() }, spotter?.let { s -> { buffer: ByteArray, count: Int -> s.feed(buffer, count) } })
                 microphone = capture
                 intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, capture.source)
@@ -206,6 +259,8 @@ class WakeListeningService : Service() {
         } catch (_: Exception) { cancelListening(); nextListen = System.currentTimeMillis() + 4000 }
     }
     override fun onDestroy() {
+        if(current===this)current=null
+        closeTranslationControl();forcedUntil=0;VideoTranslationState.pauseNarrationUntil=0
         stopping = true; microphone?.close(); microphone = null; generation++; handler.removeCallbacksAndMessages(null); recognizer?.destroy()
         recognitionReady=false;AppState.wakeReadyUntil=0;needsCue=false;cue?.close();cue=null;spotter?.close();spotter=null
         AppState.wakeRunning = false; if (!AppState.audioBusy && !AppState.assistantBusy) AppState.phase = "PRONTO"

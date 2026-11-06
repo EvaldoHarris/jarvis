@@ -918,21 +918,49 @@ do Windows. Se não houver um item único acessível pelo nome solicitado, abra
 a câmera manualmente. O Jarvis não deve confundir a seleção na lista lateral
 com a câmera efetivamente exibida no vídeo.
 
-## Reconhecimento local de rosto e voz
+## Reconhecimento local pela câmera
 
-Opcional: instale `sherpa-onnx` no mesmo ambiente do Jarvis e execute
-`python setup_identity.py` para baixar os modelos YuNet/SFace do OpenCV e
-WeSpeaker do sherpa-onnx. Reinicie o Jarvis.
+Na escuta contínua, o Jarvis acompanha a conversa em silêncio, mantendo até dois
+minutos de transcrição em memória local (limite de 12 mil caracteres). Esse
+contexto só é enviado ao provedor junto de um pedido direto autorizado, como
+“Jarvis, o que acha disso?”. Silenciar o microfone ou encerrar a sessão limpa
+esse contexto. Não são atribuídas identidades às vozes da conversa.
 
-O cadastro exige um pedido explícito. Olhe sozinho para a câmera e diga uma
-frase de pelo menos 3 segundos, como: “Jarvis, cadastre meu rosto e minha voz
-com o nome Evaldo; estou olhando para a câmera agora”. Para reconhecer, diga:
-“Jarvis, verifique pelo meu rosto e pela minha voz quem está falando com você”.
+Para gerar uma resposta, o pedido precisa começar com um chamado a **Jarvis** e corresponder à voz
+do proprietário cadastrado. A câmera não é
+exigida para essa ativação. A análise ocorre localmente após uma breve pausa
+na fala; frases sem a palavra, vozes desconhecidas e erros ficam sem resposta.
+Saudações ao iniciar, avisos e outras falas proativas continuam funcionando
+normalmente. O filtro se aplica aos pedidos ouvidos pelo microfone; o Jarvis
+não entra em repouso automaticamente por falta de conversa.
+Use “Jarvis, que horas são?” ou “Oi, Jarvis, me ajude”. Menções no meio de
+conversas, como “eu estava falando do Jarvis”, são ignoradas. A detecção aceita
+variações limitadas de transcrição do nome e rejeita transcrições incertas.
+Isso usa a posição do chamado como critério; não determina com certeza a
+intenção de toda conversa. O modelo local de ativação agora é Whisper base.
+
+Prepare os modelos com `python setup_identity.py --voice` no ambiente do projeto
+(dependências: `faster-whisper` e `sherpa-onnx`). A ativação por voz vem habilitada
+por padrão. Cadastros antigos com voz são compatíveis quando o nome corresponde
+ao proprietário configurado. Para cadastrar ou atualizar a voz, use texto ou
+push-to-talk, diga “Jarvis” várias vezes por pelo menos 3 segundos e solicite o
+cadastro de voz com seu nome (`person_identity`, ação `register_voice`).
+O cadastro seleciona a voz autorizada para ativação e preserva o rosto existente.
+Uma palavra isolada pode não fornecer evidência suficiente: nesse caso, use
+“Jarvis” junto com o pedido. Cada novo pedido precisa da palavra de ativação.
+
+Execute `python setup_identity.py` para baixar os modelos YuNet/SFace do
+OpenCV no mesmo ambiente do Jarvis. Reinicie o Jarvis.
+
+O cadastro exige um pedido explícito. Olhe sozinho para a câmera e peça:
+“Jarvis, cadastre meu rosto com o nome Evaldo”. Para reconhecer, peça:
+“Jarvis, veja pela câmera se você me reconhece”. Não é necessário validar a voz
+nem falar uma frase com duração mínima. Cadastros antigos continuam compatíveis.
 Também é possível pedir para listar os cadastros ou apagar um nome específico.
 
 O reconhecimento é sob demanda, sem monitoramento contínuo. O nome só é
-confirmado quando rosto e voz correspondem ao mesmo cadastro. Fala curta,
-mais de um rosto, pouca luz ou resultados diferentes retornam sem confirmação.
+confirmado quando o rosto corresponde a um cadastro. Mais de um rosto,
+pouca luz ou resultados ambíguos retornam sem confirmação.
 Não é autenticação, prova de presença nem identificação do falante ativo em
 uma sala com várias pessoas; gravações podem enganar o reconhecimento.
 

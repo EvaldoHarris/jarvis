@@ -19,7 +19,7 @@ object AppState {
     @Volatile var wakeRunning = false
     @Volatile var mainVisible = false
     @Volatile var wakeReadyUntil = 0L
-    fun readyForCommand() = wakeRunning && wakeReadyUntil > System.currentTimeMillis() && !assistantBusy && !audioBusy && !manualListening && expectedPhoneReply.isEmpty()
+    fun readyForCommand() = (!VideoTranslationState.active||VideoTranslationState.pauseNarrationUntil>System.currentTimeMillis()) && wakeRunning && wakeReadyUntil > System.currentTimeMillis() && !assistantBusy && !audioBusy && !manualListening && expectedPhoneReply.isEmpty()
     @Volatile var lastAudioEnd = 0L
     @Volatile var phoneReplyDeadline = 0L
     @Volatile var assistant: JarvisAssistant? = null

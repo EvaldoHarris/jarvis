@@ -2,6 +2,14 @@
 import asyncio
 
 
+async def write_audio(loop, executor, stream, pcm, timeout=3.0):
+    """A stalled driver must not leave the assistant silently waiting forever."""
+    try:
+        return await asyncio.wait_for(loop.run_in_executor(executor, stream.write, pcm), timeout)
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError("Audio output device stopped consuming PCM") from exc
+
+
 class PlaybackClock:
     """Release the microphone after actual PCM drains, even without turn_complete."""
     def __init__(self):

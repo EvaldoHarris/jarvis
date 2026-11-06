@@ -102,7 +102,7 @@ class DeviceIntegrationTest {
         val store = SecureStore(context); store.put("voice_mode", "off")
         val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         val failed = java.util.concurrent.atomic.AtomicBoolean(false)
-        val capture = ContinuousMicrophone { true }
+        val capture = ContinuousMicrophone(muted = { true })
         try {
             capture.start { failed.set(true) }
             val reader = java.util.concurrent.Executors.newSingleThreadExecutor()
