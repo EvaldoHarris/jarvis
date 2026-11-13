@@ -715,6 +715,9 @@ class JarvisLive:
         self.ui.get_plugins = self._plugin_registry.list_for_ui
         self.ui.get_plugin_settings = self._plugin_registry.settings_schemas  # ⚙ settings tab
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
+        from core.monitor_alerts import AlertDelivery
+        self._monitor_alert_delivery = AlertDelivery(self.ui, lambda: self._dashboard.android_bridge if self._dashboard else None)
+        self.ui.request_monitor_alert = self._queue_monitor_alert
 
         # ── Wake word ────────────────────────────────────────────────────────
         # Voice activation gates microphone requests independently of proactive speech.
@@ -856,13 +859,24 @@ class JarvisLive:
         return wake_install(logger=lambda m: print(f"[Wake] {m}"),
                             notify=lambda m: self.ui.write_log(f"SYS: {m}"))
 
+    def _queue_monitor_alert(self, event, feed, stopped):
+        loop = getattr(self, '_loop', None)
+        if loop is None or not loop.is_running():
+            self.ui.write_log('MONITOR: Sessão do Jarvis indisponível para entregar as imagens do alerta.')
+            return
+        trigger = time.monotonic()
+        event = dict(event, trigger=trigger)
+        history = [p for p in feed.recent() if p[2] >= trigger - 5]
+        asyncio.run_coroutine_threadsafe(self._monitor_alert_delivery.deliver(event, feed, history, stopped), loop)
+
     def plugin_say(self, instruction: str) -> None:
         """Queue plugin speech behind messages and the entire current utterance."""
         loop = getattr(self, "_loop", None)
-        if not loop or not self.session:
-            return
+        if not loop:
+            return False
         try:
             loop.call_soon_threadsafe(self._speech_announcements.enqueue, instruction)
+            return True
         except Exception as e:
             print(f"[PluginSay] {e}")
 
@@ -2982,6 +2996,8 @@ class JarvisLive:
 
 def main():
     ui = JarvisUI("face.png")
+    from core.docker_startup import start_in_background
+    start_in_background(ui.write_log)
 
     def runner():
         ui.wait_for_api_key()

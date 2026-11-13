@@ -124,6 +124,9 @@ def vms_cameras(parameters=None, **kwargs):
 TOOL = {
     "name": "vms_cameras", "tier": "core",
     "description": (
+        "Legacy fallback ONLY for an explicit request to use the VMS Pro window. "
+        "For iCSee cameras, including remote sitio cameras, prefer cameras_locais list/live/preview/analyze "
+        "which connects directly by cloud/P2P; do not open VMS by default. "
         "Access the user's iCSee security cameras through the already logged-in VMS Pro app. "
         "Works with the feeds VMS displays, including remote cameras, without storing iCSee credentials. "
         "show brings VMS forward. analyze captures ONLY its window and sends a still image to the "

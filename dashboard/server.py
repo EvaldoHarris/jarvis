@@ -1368,7 +1368,8 @@ class DashboardServer:
                     return
                 await self.android_bridge.attach(websocket, device_id, str(hello.get("name") or "Android"), lambda: _valid(token),
                                                  presence_audio=hello.get('presence_audio') is True,
-                                                 presence_video=hello.get('presence_video') is True)
+                                                 presence_video=hello.get('presence_video') is True,
+                                                 monitor_video=hello.get('monitor_video') is True)
                 from memory.config_manager import get_voice
                 from core.gemini import live_model
                 await websocket.send_json({"type": "ready", "device_id": device_id,

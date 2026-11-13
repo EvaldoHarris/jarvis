@@ -68,12 +68,21 @@ class PhoneControlService : Service() {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
                         var id = pc.store.get("device_id")
                         if (id.isEmpty()) { id = UUID.randomUUID().toString(); pc.store.put("device_id", id) }
-                        webSocket.send(JSONObject().put("type", "hello").put("device_id", id).put("name", "${Build.MANUFACTURER} ${Build.MODEL}").put("presence_audio", true).put("presence_video", true).toString())
+                        webSocket.send(JSONObject().put("type", "hello").put("device_id", id).put("name", "${Build.MANUFACTURER} ${Build.MODEL}").put("presence_audio", true).put("presence_video", true).put("monitor_video", true).toString())
                     }
                     override fun onMessage(webSocket: WebSocket, text: String) {
                         try {
                             val message = JSONObject(text)
                             val requestId = message.optString("request_id")
+                            if (message.optString("type") in listOf("monitor_alert", "monitor_frame")) {
+                                handler.post {
+                                    MonitorAlertState.init(applicationContext)
+                                    if (MonitorAlertState.receive(message)) {
+                                        AppState.message("JARVIS", "Detecção na câmera: ${MonitorAlertState.title}")
+                                        MonitorAlertActivity.notify(applicationContext)
+                                    }
+                                }
+                            }
                             if (message.optString("type") in listOf("presence_alert", "presence_frame")) {
                                 val first = message.optString("type") == "presence_alert"
                                 val encoded = message.optString("image")

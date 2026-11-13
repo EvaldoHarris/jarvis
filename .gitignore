@@ -16,6 +16,7 @@ config/dashboard_devices.tmp
 # Local biometric profiles and downloaded recognition models
 memory/identities/
 models/identity/
+models/security/
 models/translation/
 providers/voices/*.onnx
 providers/voices/*.onnx.json
@@ -32,6 +33,11 @@ config/whatsapp_web/
 *credentials*.json
 .env
 .env.*
+/.codex-attachments/xmeye-sandbox-build/
+/.codex-attachments/xmeye-probe-status.json
+/config/xmeye_devices.json
+/config/camera_monitor.json
+/config/camera_monitor.tmp
 
 # ── Personal data the assistant accumulates about you ─────────────────────────
 memory/long_term.json
@@ -67,6 +73,7 @@ desktop.ini
 logs/
 downloads/
 screenshots/
+data/monitor_recordings/
 config/api_keys.json
 
 # Shared Jarvis profile and private pairing

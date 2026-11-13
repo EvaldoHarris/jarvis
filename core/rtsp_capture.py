@@ -37,6 +37,9 @@ def build_url(camera):
 
 
 def snapshot(camera):
+    if camera.get("vendor") == "icsee":
+        from core.xmeye_camera import snapshot as cloud_snapshot
+        return cloud_snapshot(camera)
     from memory.config_manager import get_base_dir
 
     url = build_url(camera)

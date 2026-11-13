@@ -3777,7 +3777,7 @@ class PluginSettingsOverlay(QWidget):
     """
 
     _test_done = pyqtSignal(str, bool, str)   # namespace, ok, message
-    _OW = 460
+    _OW = 620
 
     def __init__(self, sections: list[dict], parent=None):
         super().__init__(parent)
@@ -3793,6 +3793,8 @@ class PluginSettingsOverlay(QWidget):
         self._widgets: dict[tuple, object] = {}    # (namespace, key) -> input widget
         self._types:   dict[tuple, str]    = {}     # (namespace, key) -> field type
         self._status_labels: dict[str, QLabel] = {} # namespace -> status QLabel
+        self._group_selectors = {}
+        self._plugin_selector = None
         self._test_done.connect(self._on_test_done)
 
         self._fs = (f"QLineEdit {{ background: #000d12; color: {C.TEXT}; "
@@ -3814,25 +3816,35 @@ class PluginSettingsOverlay(QWidget):
                 "settings (like the 3D-printer suite) into the plugins folder and "
                 "it will show up here.", 9, color=C.TEXT_DIM))
         else:
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
-            scroll.setFrameShape(QFrame.Shape.NoFrame)
-            scroll.setStyleSheet("QScrollArea { background: transparent; }")
-            inner = QWidget()
-            inner.setStyleSheet("background: transparent;")
-            form = QVBoxLayout(inner)
-            form.setContentsMargins(0, 0, 6, 0)
-            form.setSpacing(6)
+            root.addWidget(self._lbl('PLUGIN', 8, color=C.TEXT_DIM))
+            self._plugin_selector = QComboBox()
+            self._plugin_selector.setFixedHeight(36)
+            self._plugin_selector.setFont(QFont(FONT_UI, 10))
+            self._plugin_selector.setStyleSheet(self._combo_style())
+            root.addWidget(self._plugin_selector)
+            pages = QStackedWidget()
             for sec in self._sections:
+                self._plugin_selector.addItem(sec.get('title') or sec.get('namespace') or 'Plugin')
+                scroll = QScrollArea()
+                scroll.setWidgetResizable(True)
+                scroll.setFrameShape(QFrame.Shape.NoFrame)
+                scroll.setStyleSheet('QScrollArea { background: transparent; }')
+                inner = QWidget()
+                inner.setStyleSheet('background: transparent;')
+                form = QVBoxLayout(inner)
+                form.setContentsMargins(0, 4, 6, 0)
+                form.setSpacing(8)
                 self._build_section(form, sec)
-            form.addStretch(1)
-            scroll.setWidget(inner)
-            root.addWidget(scroll, 1)
+                form.addStretch(1)
+                scroll.setWidget(inner)
+                pages.addWidget(scroll)
+            self._plugin_selector.currentIndexChanged.connect(pages.setCurrentIndex)
+            root.addWidget(pages, 1)
 
         # ── bottom buttons ───────────────────────────────────────────────────
         btn_row = QHBoxLayout(); btn_row.setSpacing(8)
         if self._sections:
-            save_btn = QPushButton("▸  SALVAR")
+            save_btn = QPushButton("▸  SALVAR PLUGIN")
             save_btn.setFixedHeight(34)
             save_btn.setFont(QFont(FONT_UI, 9, QFont.Weight.Bold))
             save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -3841,7 +3853,7 @@ class PluginSettingsOverlay(QWidget):
                     border: 1px solid {C.PRI_DIM}; border-radius: 7px; }}
                 QPushButton:hover {{ background: {C.PRI_GHO}; border: 1px solid {C.PRI}; }}
             """)
-            save_btn.clicked.connect(self._save_all)
+            save_btn.clicked.connect(self._save_current)
             btn_row.addWidget(save_btn)
 
         close_btn = QPushButton("FECHAR")
@@ -3858,6 +3870,12 @@ class PluginSettingsOverlay(QWidget):
         root.addLayout(btn_row)
 
     # ── helpers ───────────────────────────────────────────────────────────────
+    def _combo_style(self):
+        return (f'QComboBox {{ background: #00131d; color: {C.TEXT}; border: 1px solid {C.BORDER_B}; '
+                'border-radius: 7px; padding: 5px 10px; }'
+                f'QComboBox QAbstractItemView {{ background: #00131d; color: {C.TEXT}; '
+                f'selection-background-color: {C.PRI_GHO}; }}')
+
     def _lbl(self, txt, fs=9, bold=False, color=C.PRI,
              align=Qt.AlignmentFlag.AlignLeft):
         w = QLabel(txt); w.setAlignment(align); w.setWordWrap(True)
@@ -3873,7 +3891,30 @@ class PluginSettingsOverlay(QWidget):
         values = sec.get("values") or {}
 
         form.addSpacing(4)
-        form.addWidget(self._lbl(title, 10, True, C.PRI))
+        section_form = form
+        group_forms = {}
+        groups = sec.get('groups') or []
+        if groups:
+            form.addWidget(self._lbl('CÂMERA / DISPOSITIVO', 8, color=C.TEXT_DIM))
+            selector = QComboBox()
+            selector.setFixedHeight(36)
+            selector.setFont(QFont(FONT_UI, 10))
+            selector.setStyleSheet(self._combo_style())
+            stack = QStackedWidget()
+            for group in groups:
+                selector.addItem(group['title'], group['id'])
+                page = QWidget()
+                layout = QVBoxLayout(page)
+                layout.setContentsMargins(0, 6, 0, 4)
+                layout.setSpacing(7)
+                if group.get('description'):
+                    layout.addWidget(self._lbl(group['description'], 9, color=C.TEXT_MED))
+                group_forms[group['id']] = layout
+                stack.addWidget(page)
+            selector.currentIndexChanged.connect(stack.setCurrentIndex)
+            self._group_selectors[ns] = selector
+            form.addWidget(selector)
+            form.addWidget(stack)
 
         for field in fields:
             if not isinstance(field, dict) or not field.get("key"):
@@ -3883,6 +3924,8 @@ class PluginSettingsOverlay(QWidget):
             label = field.get("label") or key
             default = field.get("default")
             stored  = values.get(key, default)
+
+            form = group_forms.get(field.get('group'), section_form)
 
             form.addWidget(self._lbl(label.upper(), 8, color=C.TEXT_DIM))
 
@@ -3921,6 +3964,16 @@ class PluginSettingsOverlay(QWidget):
             self._types[(ns, key)]   = ftype
             form.addWidget(w)
 
+        for layout in group_forms.values():
+            layout.addStretch(1)
+        form = section_form
+        if groups:
+            def fit_group(index):
+                page = stack.widget(index)
+                page.layout().activate()
+                stack.setFixedHeight(page.sizeHint().height())
+            selector.currentIndexChanged.connect(fit_group)
+            fit_group(0)
         # optional test/connect action button + status line
         actions = [sec.get("action")] + list(sec.get("actions") or [])
         for action in actions:
@@ -3973,8 +4026,10 @@ class PluginSettingsOverlay(QWidget):
         return out
 
     def _save_ns(self, ns: str):
-        from memory.config_manager import save_plugin_config
-        save_plugin_config(ns, self._gather(ns))
+        from memory.config_manager import get_plugin_config, save_plugin_config
+        values = dict(get_plugin_config(ns))
+        values.update(self._gather(ns))
+        save_plugin_config(ns, values)
 
     def _save_all(self):
         for sec in self._sections:
@@ -3985,6 +4040,14 @@ class PluginSettingsOverlay(QWidget):
                 if lbl:
                     lbl.setText("Salvo ✓")
                     lbl.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+
+    def _save_current(self):
+        if self._plugin_selector is None:
+            return
+        sec = self._sections[self._plugin_selector.currentIndex()]
+        ns = sec.get('namespace') or sec.get('plugin')
+        self._save_ns(ns)
+        self._on_test_done(ns, True, 'Configurações deste plugin salvas.')
 
     def _run_action(self, ns: str, action=None):
         sec = next((s for s in self._sections
@@ -3998,6 +4061,8 @@ class PluginSettingsOverlay(QWidget):
         if action.get("save", True):
             self._save_ns(ns)                 # persist before testing
         values = self._gather(ns)
+        if action.get('selected_group') and ns in self._group_selectors:
+            values['_selected_group'] = self._group_selectors[ns].currentData()
         lbl = self._status_labels.get(ns)
         if lbl:
             lbl.setText(action.get("pending", "Testando…"))
@@ -4299,6 +4364,7 @@ class MainWindow(QMainWindow):
     _cam_stream_sig = pyqtSignal(bool)       # True=start live stream, False=stop
     _cam_frame_sig  = pyqtSignal(bytes)      # live camera frame → HUD area
     _security_sig = pyqtSignal(object)
+    _monitor_alert_sig = pyqtSignal(object)
     _video_open_sig  = pyqtSignal(str, str, bool, str)  # video, title, muted, audio
     _wake_btns_sig   = pyqtSignal()          # wake state resolved off-thread
     _video_close_sig = pyqtSignal()
@@ -4599,6 +4665,7 @@ class MainWindow(QMainWindow):
         self._cam_stream_sig.connect(self._on_cam_stream)
         self._cam_frame_sig.connect(self._on_cam_frame)
         self._security_sig.connect(self._on_security_event)
+        self._monitor_alert_sig.connect(self._on_monitor_alert)
         self._wake_btns_sig.connect(self._refresh_wake_btns)
         self._video_open_sig.connect(self._on_video_open)
         from core.translation_overlay import TranslationOverlay
@@ -4668,6 +4735,18 @@ class MainWindow(QMainWindow):
             self._security_active = False
             self._on_cam_stream(False)
             self.write_log("SYS: Transmissão da câmera encerrada.")
+
+    def _on_monitor_alert(self, packet):
+        from core.camera_monitor_panel import MonitorAlertWindow
+        windows = getattr(self, '_monitor_alert_windows', {})
+        self._monitor_alert_windows = windows
+        key = packet['group']
+        if packet['type'] == 'monitor_alert':
+            if key not in windows:
+                windows[key] = MonitorAlertWindow(self)
+            windows[key].begin(packet)
+        if key in windows:
+            windows[key].receive(packet)
 
     def _on_cam_stream(self, start: bool) -> None:
         if self._security_active:
@@ -5761,6 +5840,14 @@ class MainWindow(QMainWindow):
         settings_btn.setStyleSheet(_BTN_STYLE_DIM)
         settings_btn.clicked.connect(self._open_plugin_settings)
         lay.addWidget(settings_btn)
+
+        monitor_btn = QPushButton('◉  MONITORAMENTO DE CÂMERAS')
+        monitor_btn.setFixedHeight(26)
+        monitor_btn.setFont(QFont(FONT_UI, 7))
+        monitor_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        monitor_btn.setStyleSheet(_BTN_STYLE_DIM)
+        monitor_btn.clicked.connect(self._open_camera_monitor)
+        lay.addWidget(monitor_btn)
 
         # The button is built here with the rest of the drawer; the panel behind
         # it — and the whole providers package — is imported on the click. The
@@ -7161,12 +7248,25 @@ class MainWindow(QMainWindow):
         ov.raise_()
         self._plugin_manager_overlay = ov   # keep a reference so it isn't GC'd
 
+    def _open_camera_monitor(self):
+        from core.camera_monitor_panel import MonitorPanel
+        previous = getattr(self, '_camera_monitor_panel', None)
+        if previous is not None:
+            previous.hide()
+            previous.deleteLater()
+        cw = self.centralWidget()
+        panel = MonitorPanel(getattr(self, '_camera_monitor_player', None), cw)
+        width, height = min(720, cw.width() - 24), min(730, cw.height() - 24)
+        panel.setGeometry((cw.width() - width) // 2, (cw.height() - height) // 2, width, height)
+        panel.show(); panel.raise_()
+        self._camera_monitor_panel = panel
+
     def _open_plugin_settings(self):
         sections = self.get_plugin_settings() if self.get_plugin_settings else []
         cw = self.centralWidget()
         ov = PluginSettingsOverlay(sections, parent=cw)
-        ow = PluginSettingsOverlay._OW
-        oh = min(560, cw.height() - 16)
+        ow = min(PluginSettingsOverlay._OW, cw.width() - 24)
+        oh = min(650, cw.height() - 24)
         ov.setGeometry(
             (cw.width()  - ow) // 2,
             (cw.height() - oh) // 2,
@@ -7319,6 +7419,9 @@ class JarvisUI:
         self._app.setWindowIcon(icon)
         self._app.setStyle("Fusion")
         self._win = MainWindow(face_path)
+        self._win._camera_monitor_player = self
+        from core.camera_monitor import hub as monitor_hub
+        self._app.aboutToQuit.connect(lambda: monitor_hub.stop(wait=True))
         self._win.setWindowIcon(icon)
         self.root = _RootShim(self._app)
         self._win.show()
@@ -7531,9 +7634,12 @@ class JarvisUI:
         self._win._camera_sig.emit(img_bytes)
 
     def start_security_camera(self, camera):
-        """Decode RTSP off-thread; only queued signals touch the live HUD."""
+        """Receive iCSee cloud or Intelbras RTSP frames through queued HUD signals."""
         from core.rtsp_live import live_camera
         return live_camera.start(camera, self._win._security_sig.emit)
+
+    def show_monitor_alert(self, packet):
+        self._win._monitor_alert_sig.emit(packet)
 
     def stop_security_camera(self):
         self._win.stop_camera_stream()

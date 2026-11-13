@@ -12,6 +12,9 @@ class HomeActivity : FeatureActivity() {
     private fun render() {
         column.removeAllViews(); line("CASA — CÂMERAS E LUZES")
         button("VOLTAR AO JARVIS"){finish()}
+        button("GRAVAÇÕES DOS ALERTAS — 24 HORAS") {
+            startActivity(Intent(this, MonitorAlertActivity::class.java))
+        }
         button("IMPORTAR CONFIGURAÇÕES DO PC PAREADO"){
             AlertDialog.Builder(this).setTitle("Copiar configurações da casa?")
                 .setMessage("Copia para o armazenamento criptografado deste celular os endereços e credenciais das câmeras e da Tuya configurados no PC. Depois, o celular acessa esses serviços diretamente, sem depender do PC.")

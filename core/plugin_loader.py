@@ -149,6 +149,7 @@ class PluginRegistry:
                 "namespace": ns,
                 "title":     rec.settings.get("title") or rec.name,
                 "fields":    rec.settings.get("fields", []),
+                "groups":    rec.settings.get("groups", []),
                 "values":    get_plugin_config(ns),
                 "action":    rec.settings.get("action"),   # optional test/connect button
                 "actions":   rec.settings.get("actions", []),

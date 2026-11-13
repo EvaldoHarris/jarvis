@@ -25,16 +25,19 @@ class LiveCamera:
         self._lock = threading.RLock()
         self._start_lock = threading.Lock()
         self._process = None
+        self._pending = None
         self._generation = 0
 
     def stop(self):
         with self._lock:
             self._generation += 1
             process, self._process = self._process, None
-            if process:
-                if process.poll() is None:
-                    process.kill()
-                process.wait(timeout=3)
+            pending, self._pending = self._pending, None
+            for active in (process, pending):
+                if active:
+                    if active.poll() is None:
+                        active.kill()
+                    active.wait(timeout=3)
 
     def start(self, camera, emit):
         with self._start_lock:
@@ -42,15 +45,21 @@ class LiveCamera:
 
     def _start(self, camera, emit):
         from memory.config_manager import get_base_dir
-        url = build_url(camera)
+        cloud = camera.get("vendor") == "icsee"
+        url = None if cloud else build_url(camera)
         if getattr(sys, "frozen", False):
             raise RuntimeError("RTSP requires Python installation")
         with self._lock:
             flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
-            process = subprocess.Popen(
-                [sys.executable, "-m", "core.rtsp_capture"], cwd=str(get_base_dir()),
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **flags)
+            if cloud:
+                from core.xmeye_camera import open_live
+                process = open_live(camera)
+            else:
+                process = subprocess.Popen(
+                    [sys.executable, "-m", "core.rtsp_capture"], cwd=str(get_base_dir()),
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **flags)
             previous_generation = self._generation
+            self._pending = process
             generation = previous_generation + 1
             ready = threading.Event()
             received = []
@@ -58,8 +67,9 @@ class LiveCamera:
 
             def consume():
                 try:
-                    process.stdin.write(json.dumps({"url": url, "live": True}).encode())
-                    process.stdin.close()
+                    if not cloud:
+                        process.stdin.write(json.dumps({"url": url, "live": True}).encode())
+                        process.stdin.close()
                     while True:
                         size = struct.unpack("!I", _read_exact(process.stdout, 4))[0]
                         if not 4 <= size <= 4_000_000:
@@ -71,6 +81,7 @@ class LiveCamera:
                             if not received:
                                 if previous_generation != self._generation:
                                     return
+                                self._pending = None
                                 self.stop()
                                 self._process = process
                                 emit((generation, "start", title))
@@ -84,10 +95,12 @@ class LiveCamera:
                 finally:
                     ready.set()
                     with self._lock:
+                        if self._pending is process:
+                            self._pending = None
                         if self._process is process and generation == self._generation:
                             emit((generation, "end", None))
                             self.stop()
-                    if process.poll() is None:
+                    if cloud or process.poll() is None:
                         process.kill()
                     process.wait()
                     if not process.stdin.closed:
@@ -95,7 +108,7 @@ class LiveCamera:
                     process.stdout.close()
 
             threading.Thread(target=consume, daemon=True, name="rtsp-live").start()
-        if not ready.wait(12) or not received:
+        if not ready.wait(80 if cloud else 12) or not received:
             if process.poll() is None:
                 process.kill()
             process.wait(timeout=3)

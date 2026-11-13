@@ -42,6 +42,7 @@
         <activity android:name=".WakeCalibrationActivity" android:exported="false" />
         <activity android:name=".CameraActivity" android:exported="false" android:launchMode="singleTop" />
         <activity android:name=".PresenceAlertActivity" android:exported="false" android:launchMode="singleTop" />
+        <activity android:name=".MonitorAlertActivity" android:exported="false" android:launchMode="singleTop" />
         <receiver android:name=".TaskReminderReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

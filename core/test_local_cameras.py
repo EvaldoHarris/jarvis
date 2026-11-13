@@ -9,10 +9,14 @@ from plugins import cameras_locais as cameras
 
 class LocalCameraTests(unittest.TestCase):
     def setUp(self):
+        self.devices = patch.object(cameras, 'load_devices', return_value=[])
+        self.devices.start()
+        self.addCleanup(self.devices.stop)
         self.camera = dict(host="192.168.15.73", username="test", password="p@ss&word",
-                           vendor="icsee", channel=1, stream=1)
+                           vendor="intelbras", channel=1, stream=1)
 
     def test_credentials_are_encoded_for_vendor_urls(self):
+        self.camera['vendor'] = 'icsee'
         url = rtsp_capture.build_url(self.camera)
         self.assertIn("password=p%40ss%26word", url)
         self.camera["vendor"] = "intelbras"
@@ -76,7 +80,8 @@ class LocalCameraTests(unittest.TestCase):
 
     def test_defaults_match_discovered_addresses_without_guessing_credentials(self):
         configs = cameras._cameras({})
-        self.assertEqual([c["host"] for c in configs], ["192.168.15.73", "192.168.15.149"])
+        self.assertEqual([c["host"] for c in configs], ["", "192.168.15.149"])
+        self.assertEqual(configs[0]['cloud_id'], '')
         self.assertTrue(all(not c["username"] and not c["password"] for c in configs))
 
     def test_unique_vendor_aliases_and_duplicate_vendor_rejection(self):
@@ -106,6 +111,17 @@ class LocalCameraTests(unittest.TestCase):
         self.assertIn("1/2", message)
         self.assertIn("DVR:", message)
         self.assertEqual(capture.call_count, 2)
+
+    def test_settings_test_connects_only_selected_camera(self):
+        devices = [dict(self.camera, name='One', _settings_group='one'),
+                   dict(self.camera, name='Two', _settings_group='two')]
+        with patch.object(cameras, '_cameras', return_value=devices), \
+                patch.object(cameras, 'snapshot', return_value=b'image') as capture:
+            success, message = cameras._test({'_selected_group': 'two'})
+        self.assertTrue(success)
+        capture.assert_called_once()
+        self.assertEqual(capture.call_args.args[0]['name'], 'Two')
+        self.assertIn('1/1', message)
 
     def test_dvr_channel_selection_uses_same_credentials_without_mutating_default(self):
         device = dict(self.camera, vendor="intelbras", name="DVR", channel_count="16")

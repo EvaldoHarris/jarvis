@@ -857,11 +857,40 @@ selecionada na interface do próprio Discord. O retorno manual por `voltei`
 permanece disponível. A execução do script não comprova visualmente o status;
 o Jarvis relata essa limitação e não repete o comando automaticamente.
 
-## Câmeras iCSee pelo VMS Pro
+## Câmeras iCSee pela nuvem e Intelbras por RTSP
+
+Há um painel separado em **Configuração → MONITORAMENTO DE CÂMERAS** para
+criar vários grupos, escolher suas câmeras e iniciar/parar a observação.
+Pessoas e veículos são detectados localmente; somente os eventos são enviados
+à IA para análise e aviso de voz. Consulte [Monitoramento por grupos](docs/CAMERA_MONITORING.md)
+para configuração, rodízio, limites e funcionamento dos avisos.
+
+O plugin `cameras_locais` conecta as iCSee por **Cloud ID/P2P**, inclusive as
+câmeras do sítio em outra rede. O vídeo é recebido pelo SDK em um contêiner
+Docker e exibido no Jarvis; não depende do VMS nem do plugin antigo do navegador.
+O DVR Intelbras continua pelo IP local e RTSP.
+
+A lista importada de dispositivos fica em `config/xmeye_devices.json` (ignorado
+pelo Git). Em **Config. de plugins → CÂMERAS — ICSEE NUVEM / INTELBRAS**, preencha
+o usuário e a senha do dispositivo de cada câmera que deseja usar. Também é
+possível escolher a câmera no formulário `scripts/xmeye_sandbox/control.py` e
+clicar em **Salvar no Jarvis e testar**. A senha é específica de cada câmera;
+as demais continuam listadas, mas não conectam até serem configuradas.
+
+Mantenha o Docker aberto. O ambiente de conexão, os comandos de preparação e
+os limites estão em [Integração iCSee](scripts/xmeye_sandbox/README.md). A senha
+fica nas configurações locais ignoradas pelo Git; não vai para a linha de
+comando ou logs. O SDK não é carregado no processo principal do Jarvis.
+
+Exemplos: “liste minhas câmeras”, “abra a câmera casa”, “mostre ao vivo a câmera
+Entrada”, “feche a câmera”. `preview` captura uma imagem; `live` mantém o vídeo
+no HUD, até 5 quadros/s e sem áudio; `analyze` envia uma captura ao provedor de IA
+configurado, com anúncio prévio. Não há gravação, PTZ ou análise contínua de
+comportamento. Nomes repetidos recebem um sufixo para evitar seleção errada.
 
 ### Acesso direto às câmeras locais
 
-O plugin `cameras_locais` permite capturar uma imagem diretamente por RTSP
+Para Intelbras, o plugin `cameras_locais` permite capturar uma imagem diretamente por RTSP
 ou localizar possíveis dispositivos com “Busque câmeras na rede” (`discover`).
 A mesma busca está em **Config. de plugins → Câmeras locais → BUSCAR CÂMERAS NA REDE**.
 Ela verifica portas RTSP e de DVR nas redes IPv4 privadas ativas do computador,
@@ -876,11 +905,9 @@ FECHAR ou “feche a câmera” encerram a transmissão e devolvem o espaço ao 
 O vídeo é local, sem áudio, gravação ou envio contínuo à IA. A análise pela IA
 continua sendo solicitada separadamente com `analyze`. A quantidade de canais
 pode ser definida nas configurações do plugin; não é descoberta automaticamente.
-Após reiniciar o Jarvis, abra **Config. de plugins → CÂMERAS
-LOCAIS — RTSP DIRETO**. Dois dispositivos descobertos nesta instalação estão
-pré-preenchidos: `192.168.15.73` (iCSee/XM) e `192.168.15.149` (Intelbras).
-Renomeie-os conforme o local e preencha o usuário e a senha **do dispositivo**,
-que podem ser diferentes da conta do iCSee. Use **TESTAR CÂMERAS**.
+Após reiniciar o Jarvis, abra **Config. de plugins → CÂMERAS — ICSEE NUVEM /
+INTELBRAS**. O DVR Intelbras usa o IP local configurado e a seleção de canal.
+Preencha o usuário e a senha **do dispositivo**. Use **TESTAR CÂMERAS**.
 
 Os caminhos RTSP são tentativas baseadas na família do equipamento, não uma
 garantia de compatibilidade. O stream 1 é a opção leve; tente 0 para o principal
@@ -888,7 +915,7 @@ se necessário. IPs podem mudar com DHCP; é recomendável reservá-los no rotea
 Não há tentativa de senhas alternativas, acesso a gravações ou controle PTZ.
 O acesso direto desta integração exige executar o Jarvis pelo Python.
 
-Comandos: “liste as câmeras locais”, “teste a câmera iCSee”, “mostre a câmera
+Comandos: “liste as câmeras”, “teste a câmera casa”, “mostre a câmera
 Intelbras” (imagem local) ou “analise a câmera Intelbras” (imagem enviada à IA).
 `preview` e `analyze` capturam uma imagem; `live` mantém o vídeo aberto. O áudio da conversa e
 os resultados textuais seguem o provedor do Jarvis mesmo na prévia local.
@@ -899,7 +926,10 @@ esse arquivo. URLs autenticadas são passadas ao processo de captura pela entrad
 padrão, não pela linha de comando, e os logs nativos do capturador são descartados
 para evitar expor senhas. Não é necessário abrir portas no roteador.
 
-### Câmeras remotas pelo VMS
+### VMS Pro como opção alternativa explícita
+
+O VMS não é mais a conexão padrão das câmeras iCSee remotas. A ferramenta abaixo
+permanece disponível para pedidos que mencionem explicitamente a janela do VMS.
 
 Com o VMS Pro aberto, conectado e mostrando as câmeras, o Jarvis pode usar
 `vms_cameras` para mostrar a janela, tentar selecionar uma câmera pelo nome

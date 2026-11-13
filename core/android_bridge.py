@@ -15,11 +15,12 @@ class AndroidBridge:
         self.loop = None
         self.last_delivery_error = ''
 
-    async def attach(self, websocket, device_id, name, authorized=lambda: True, presence_audio=False, presence_video=False):
+    async def attach(self, websocket, device_id, name, authorized=lambda: True, presence_audio=False, presence_video=False, monitor_video=False):
         self.loop = asyncio.get_running_loop()
         previous = self.devices.get(device_id)
         self.devices[device_id] = {"socket": websocket, "name": name[:80], "connected_at": time.time(), "authorized": authorized,
-                                   "presence_audio": presence_audio is True, 'presence_video': presence_video is True}
+                                   "presence_audio": presence_audio is True, 'presence_video': presence_video is True,
+                                   'monitor_video': monitor_video is True}
         if previous:
             await previous["socket"].close(code=4000)
 
@@ -34,8 +35,20 @@ class AndroidBridge:
     def list_devices(self):
         return [{"id": key, "name": value["name"], "connected": True,
                  'presence_audio': value.get('presence_audio', False),
-                 'presence_video': value.get('presence_video', False)}
+                 'presence_video': value.get('presence_video', False),
+                 'monitor_video': value.get('monitor_video', False)}
                 for key, value in list(self.devices.items()) if value["authorized"]()]
+
+    async def deliver_monitor_frame(self, device_id, packet, image):
+        device = self.devices.get(device_id)
+        if not device or not device['authorized']() or not device.get('monitor_video') or len(image) > 700_000:
+            return False
+        try:
+            await asyncio.wait_for(device['socket'].send_json(dict(packet,
+                image=base64.b64encode(image).decode('ascii'))), 2)
+            return True
+        except Exception:
+            return False
 
     def _resolve(self, device_id):
         """Aceita o ID exato, o nome do aparelho ou nenhum valor quando só há um Android online."""
